@@ -1,11 +1,12 @@
-﻿using Microsoft.CodeAnalysis;
+﻿using ConversionClassLibrary;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using static Microsoft.CodeAnalysis.CSharp.SyntaxFactory;
 
 namespace NUnitToXunitConverter.Conversion;
 
-class XunitSyntaxRewriter : CSharpSyntaxRewriter
+public class XunitSyntaxRewriter : CSharpSyntaxRewriter
 {
     private bool _hasSetUp;
     private bool _hasTearDown;
@@ -17,6 +18,7 @@ class XunitSyntaxRewriter : CSharpSyntaxRewriter
     private MethodDeclarationSyntax? _oneTimeSetUpMethod;
 
     private string? _testClassName;
+    internal OneTimeSetUpContext OneTimeSetUpContext = new OneTimeSetUpContext();
 
     // ---------------- USING ----------------
 
@@ -197,8 +199,10 @@ class XunitSyntaxRewriter : CSharpSyntaxRewriter
 
     public override SyntaxNode? VisitExpressionStatement(ExpressionStatementSyntax node)
     {
-        if (node.Expression is InvocationExpressionSyntax inv &&
-            inv.Expression is MemberAccessExpressionSyntax ma &&
+        if (node.Expression is InvocationExpressionSyntax
+            {
+                Expression: MemberAccessExpressionSyntax ma
+            } inv &&
             ma.Expression.ToString() == "Assert" &&
             inv.ArgumentList.Arguments.Count == 3)
         {

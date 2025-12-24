@@ -1,8 +1,12 @@
-﻿namespace NUnitToXunitConverter.Conversion;
+﻿using ConversionClassLibrary.Interfaces;
 
-static class NUnitTestDetector
+namespace NUnitToXunitConverter.Conversion;
+
+public class NUnitTestDetector : IUnitTestDetector
 {
-    public static bool IsNUnitTest(string file)
+    public File File { get; set; } = System.IO.InputOutput.Instance.File;
+
+    public bool IsNUnitTest(string file)
     {
         var text = File.ReadAllText(file);
 

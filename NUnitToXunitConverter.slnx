@@ -5,5 +5,10 @@
     <File Path="NuGet.config" />
     <File Path="README.md" />
   </Folder>
-  <Project Path="NUnitToXunitConverter/NUnitToXunitConverter.csproj" />
+  <Folder Name="/Tests/">
+    <Project Path="NUnitToXunitConverter.Tests/NUnitToXunitConverter.Tests.csproj" Id="d16b2c5e-2ca2-4bfd-90e7-7c44db8d8ed7" />
+  </Folder>
+  <Project Path="ConversionClassLibrary/ConversionClassLibrary.csproj" Id="6d9de995-4614-460f-bac9-56559f80f072" />
+  <Project Path="NUnitToXunitConverter/NUnitToXunitConverter.csproj" DisplayName="NUnitToXUnitConverter" />
+  <Project Path="ProjectsLibrary/ProjectsLibrary.csproj" Id="cbc612dc-4757-4146-9f71-efaea6b0c46b" />
 </Solution>

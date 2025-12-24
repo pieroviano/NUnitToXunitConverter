@@ -9,6 +9,16 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <PackageReference Include="Net4x.StandardTypesWrappers" Version="1.2.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ConversionClassLibrary\ConversionClassLibrary.csproj" />
+    <ProjectReference Include="..\ProjectsLibrary\ProjectsLibrary.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Interfaces\Conversion\" />
   </ItemGroup>
 
 </Project>

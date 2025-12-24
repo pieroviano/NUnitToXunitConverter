@@ -1,10 +1,16 @@
-﻿namespace NUnitToXunitConverter.Projects;
+﻿using System.Diagnostics;
 
-internal static class ProjectRestoreService
+namespace ProjectsLibrary;
+
+public class ProjectRestoreService
 {
+    public File File { get; set; } = System.IO.InputOutput.Instance.File;
+    public Path Path { get; set; } = System.IO.InputOutput.Instance.Path;
+    public Directory Directory { get; set; } = System.IO.InputOutput.Instance.Directory;
+
     private const string ExternalFilesFolderName = "_ExternalFiles";
 
-    public static void RestoreBackupIfExists(string csprojPath)
+    public void RestoreBackupIfExists(string csprojPath)
     {
         var projectDir = Path.GetDirectoryName(csprojPath)!;
         var projectName = Path.GetFileName(projectDir);
@@ -15,13 +21,13 @@ internal static class ProjectRestoreService
         if (!Directory.Exists(backupProjectDir))
             return;
 
-        Console.WriteLine($"Restoring backup from {backupProjectDir}");
+        LoggerFactoryContainer.Instance.LoggerFactory.Info($"Restoring backup from {backupProjectDir}");
 
         RestoreProjectCsFiles(projectDir, backupProjectDir);
         RestoreExternalFiles(backupProjectDir);
     }
 
-    private static void RestoreProjectCsFiles(string projectDir, string backupProjectDir)
+    private void RestoreProjectCsFiles(string projectDir, string backupProjectDir)
     {
         foreach (var backupFile in Directory.GetFiles(
                      backupProjectDir, "*.cs", SearchOption.AllDirectories))
@@ -30,7 +36,7 @@ internal static class ProjectRestoreService
 
             // Skip external files container
             if (relativePath.StartsWith(
-                    ExternalFilesFolderName + Path.DirectorySeparatorChar,
+                    ExternalFilesFolderName + System.IO.Path.DirectorySeparatorChar,
                     StringComparison.OrdinalIgnoreCase))
                 continue;
 
@@ -41,7 +47,7 @@ internal static class ProjectRestoreService
         }
     }
 
-    private static void RestoreExternalFiles(string backupProjectDir)
+    private void RestoreExternalFiles(string backupProjectDir)
     {
         var externalDir = Path.Combine(backupProjectDir, ExternalFilesFolderName);
 
@@ -58,10 +64,10 @@ internal static class ProjectRestoreService
         }
     }
 
-    private static string DecodeOriginalPath(string externalRoot, string backupFilePath)
+    private string DecodeOriginalPath(string externalRoot, string backupFilePath)
     {
         var relative = Path.GetRelativePath(externalRoot, backupFilePath);
-        var parts = relative.Split(Path.DirectorySeparatorChar);
+        var parts = relative.Split(System.IO.Path.DirectorySeparatorChar);
 
         var drive = parts[0].Replace('_', ':');
         var rest = Path.Combine(parts.Skip(1).ToArray());

@@ -1,14 +1,22 @@
 ﻿using System.Xml.Linq;
-using NUnitToXunitConverter.Conversion;
+using ConversionClassLibrary.Interfaces;
 
-namespace NUnitToXunitConverter.Projects;
+namespace ProjectsLibrary;
 
-internal static class ProjectScanner
+public class ProjectScanner : IProjectScanner
 {
-    public static IEnumerable<string> GetCsFiles(string csprojPath)
+    public File File { get; set; } = System.IO.InputOutput.Instance.File;
+    public Path Path { get; set; } = System.IO.InputOutput.Instance.Path;
+    public Directory Directory { get; set; } = System.IO.InputOutput.Instance.Directory;
+
+    public IEnumerable<string> GetCsFiles(string csprojPath)
     {
-        var projectDir = Path.GetDirectoryName(csprojPath)!;
-        var objDir = Path.Combine(projectDir, "obj") + Path.DirectorySeparatorChar;
+        var projectDir = Path.GetDirectoryName(csprojPath);
+        var objDir = Path.Combine(projectDir, "obj");
+        if (!objDir.EndsWith(System.IO.Path.DirectorySeparatorChar))
+        {
+            objDir += System.IO.Path.DirectorySeparatorChar;
+        }
 
         var doc = XDocument.Load(csprojPath);
 
@@ -62,17 +70,17 @@ internal static class ProjectScanner
             }
         }
 
+        foreach (var file in includedFiles.Where(f => f.StartsWith(objDir)))
+        {
+            removedFiles.Add(file);
+        }
+
         return includedFiles
             .Except(removedFiles)
             .Where(File.Exists);
     }
 
-    public static string[] GetNUnitCsFiles(string csprojPath)
-    {
-        return GetCsFiles(csprojPath).Where(NUnitTestDetector.IsNUnitTest).OrderBy(f => File.ReadAllText(f).Contains("[OneTimeSetUp]") ? "_____.cs" : f).ToArray();
-    }
-
-    private static IEnumerable<string> ExpandGlob(string baseDir, string pattern)
+    private IEnumerable<string> ExpandGlob(string baseDir, string pattern)
     {
         var rootedPattern = Path.GetFullPath(Path.Combine(baseDir, pattern));
 
@@ -103,7 +111,7 @@ internal static class ProjectScanner
         }
         else
         {
-            var searchDir = Path.GetDirectoryName(rootedPattern)!;
+            var searchDir = Path.GetDirectoryName(rootedPattern);
             var searchPattern = Path.GetFileName(pattern);
 
             if (!Directory.Exists(searchDir))
@@ -118,20 +126,20 @@ internal static class ProjectScanner
         }
     }
 
-    private static string ExpandMsBuildProperties(string value, string csprojPath)
+    private string ExpandMsBuildProperties(string value, string csprojPath)
     {
-        var projectDir = Path.GetDirectoryName(csprojPath)!;
+        var projectDir = Path.GetDirectoryName(csprojPath);
         var projectName = Path.GetFileName(projectDir);
 
         return value
-            .Replace("$(MSBuildThisFileDirectory)", projectDir + Path.DirectorySeparatorChar)
-            .Replace("$(ProjectDir)", projectDir + Path.DirectorySeparatorChar)
+            .Replace("$(MSBuildThisFileDirectory)", projectDir + System.IO.Path.DirectorySeparatorChar)
+            .Replace("$(ProjectDir)", projectDir + System.IO.Path.DirectorySeparatorChar)
             .Replace("$(MSBuildProjectDirectory)", projectDir)
             .Replace("$(MSBuildProjectName)", projectName)
             .Replace("$(MSBuildProjectFullPath)", csprojPath);
     }
 
-    private static bool IsCandidateCsFile(string fullPath, string objDir)
+    private bool IsCandidateCsFile(string fullPath, string objDir)
     {
         if (!fullPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
         {

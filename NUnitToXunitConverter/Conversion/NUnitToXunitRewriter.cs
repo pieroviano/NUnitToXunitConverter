@@ -3,9 +3,11 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace NUnitToXunitConverter.Conversion;
 
-static class NUnitToXunitRewriter
+public class NUnitToXunitRewriter
 {
-    public static void RewriteFile(string path)
+    public File File { get; set; } = System.IO.InputOutput.Instance.File;
+
+    public void RewriteFile(string path)
     {
         var code = File.ReadAllText(path);
         var tree = CSharpSyntaxTree.ParseText(code);

@@ -1,37 +1,43 @@
-﻿using NUnitToXunitConverter.Conversion;
-using NUnitToXunitConverter.Projects;
+﻿using System.Diagnostics;
+using NUnitToXunitConverter.Conversion;
+using NUnitToXUnitConverter.Conversion;
+using ProjectsLibrary;
 
 namespace NUnitToXunitConverter;
 
 public class Program
 {
+    public static File File { get; set; } = System.IO.InputOutput.Instance.File;
+    public static Path Path { get; set; } = System.IO.InputOutput.Instance.Path;
+
     public static int Main(string[] args)
     {
+        LoggerFactoryContainer.Instance.LoggerFactory = ConsoleLoggerFactory.Instance;
         if (args.Length == 0 || !File.Exists(args[0]))
         {
-            Console.WriteLine("Usage: NUnitToXunitConverter <path-to-csproj>");
+            LoggerFactoryContainer.Instance.LoggerFactory.Info("Usage: NUnitToXunitConverter <path-to-csproj>");
             return 1;
         }
 
         var csprojPath = Path.GetFullPath(args[0]);
 
         // 1️ Restore previous backup if present
-        ProjectRestoreService.RestoreBackupIfExists(csprojPath);
+        new ProjectRestoreService().RestoreBackupIfExists(csprojPath);
 
         // 2️ Scan project AFTER restore
-        var projectFiles = ProjectScanner.GetNUnitCsFiles(csprojPath);
+        var projectFiles = new NUnitFiles().GetNUnitCsFiles(csprojPath);
 
         // 3️ Create fresh backup
-        ProjectBackupService.CreateBackup(csprojPath, projectFiles);
+        new ProjectBackupService().CreateBackup(csprojPath, projectFiles);
 
         // 4️ Run conversion
         foreach (var file in projectFiles)
         {
-            Console.WriteLine($"Converting: {file}");
-            NUnitToXunitRewriter.RewriteFile(file);
+            LoggerFactoryContainer.Instance.LoggerFactory.Info($"Converting: {file}");
+            new NUnitToXunitRewriter().RewriteFile(file);
         }
 
-        Console.WriteLine("Conversion complete.");
+        LoggerFactoryContainer.Instance.LoggerFactory.Info("Conversion complete.");
         return 0;
     }
 }

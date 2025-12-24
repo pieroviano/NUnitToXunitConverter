@@ -1,8 +1,12 @@
-﻿namespace NUnitToXunitConverter.Projects;
+﻿namespace ProjectsLibrary;
 
-internal static class ProjectBackupService
+public class ProjectBackupService
 {
-    public static void CreateBackup(string csprojPath, IEnumerable<string> projectFiles)
+    public File File { get; set; } = System.IO.InputOutput.Instance.File;
+    public Path Path { get; set; } = System.IO.InputOutput.Instance.Path;
+    public Directory Directory { get; set; } = System.IO.InputOutput.Instance.Directory;
+
+    public void CreateBackup(string csprojPath, IEnumerable<string> projectFiles)
     {
         var projectDir = Path.GetDirectoryName(csprojPath)!;
         var projectName = Path.GetFileName(projectDir);
@@ -24,7 +28,7 @@ internal static class ProjectBackupService
         CopyExternalFiles(projectFiles, projectDir, externalFilesDir);
     }
 
-    private static void CopyDirectory(string sourceDir, string destinationDir)
+    private void CopyDirectory(string sourceDir, string destinationDir)
     {
         Directory.CreateDirectory(destinationDir);
 
@@ -41,7 +45,7 @@ internal static class ProjectBackupService
         }
     }
 
-    private static void CopyExternalFiles(IEnumerable<string> projectFiles, string projectDir, 
+    private void CopyExternalFiles(IEnumerable<string> projectFiles, string projectDir, 
         string externalFilesDir)
     {
         foreach (var file in projectFiles)
@@ -61,13 +65,13 @@ internal static class ProjectBackupService
         }
     }
 
-    private static string GetSafeRelativePath(string fullPath)
+    private string GetSafeRelativePath(string fullPath)
     {
         var root = Path.GetPathRoot(fullPath)!;
 
         return fullPath
             .Substring(root.Length)
             .Replace(':', '_')
-            .TrimStart(Path.DirectorySeparatorChar);
+            .TrimStart(System.IO.Path.DirectorySeparatorChar);
     }
 }
