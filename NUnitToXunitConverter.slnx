@@ -1,3 +1,9 @@
 <Solution>
-  <Project Path="NUnitToXunitConverter/NUnitToXunitConverter.csproj" DisplayName="NUnitToXUnitConverter" />
+  <Folder Name="/Solution Items/">
+    <File Path=".gitignore" />
+    <File Path="LICENSE.md" />
+    <File Path="NuGet.config" />
+    <File Path="README.md" />
+  </Folder>
+  <Project Path="NUnitToXunitConverter/NUnitToXunitConverter.csproj" />
 </Solution>
