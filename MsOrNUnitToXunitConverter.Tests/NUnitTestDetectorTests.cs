@@ -1,7 +1,7 @@
 using NSubstitute;
 using Xunit;
-using NUnitToXunitConverter.Conversion;
 using ConversionClassLibrary.Interfaces;
+using MsOrNUnitToXunitConverter.Conversion;
 
 namespace NUnitToXunitConverter.Tests;
 
@@ -19,7 +19,7 @@ public class NUnitTestDetectorTests
         file.ReadAllText(path).Returns("using NUnit.Framework;");
 
         // Act
-        var result = sut.IsNUnitTest(path);
+        var result = sut.IsUnitTest(path);
 
         // Assert
         Assert.True(result);
@@ -38,7 +38,7 @@ public class NUnitTestDetectorTests
         file.ReadAllText(path).Returns("class C { [Test] public void T() {} }");
 
         // Act
-        var result = sut.IsNUnitTest(path);
+        var result = sut.IsUnitTest(path);
 
         // Assert
         Assert.True(result);
@@ -57,7 +57,7 @@ public class NUnitTestDetectorTests
         file.ReadAllText(path).Returns("using System; class D { void M() {} }");
 
         // Act
-        var result = sut.IsNUnitTest(path);
+        var result = sut.IsUnitTest(path);
 
         // Assert
         Assert.False(result);

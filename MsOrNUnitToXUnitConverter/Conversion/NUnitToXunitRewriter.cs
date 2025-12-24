@@ -1,15 +1,20 @@
-﻿using Microsoft.CodeAnalysis;
+﻿using ConversionClassLibrary;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
-namespace NUnitToXunitConverter.Conversion;
+namespace MsOrNUnitToXunitConverter.Conversion;
 
-public class NUnitToXunitRewriter
+public class NUnitToXunitRewriter(bool hasMsTests)
 {
     public File File { get; set; } = System.IO.InputOutput.Instance.File;
 
     public void RewriteFile(string path)
     {
         var code = File.ReadAllText(path);
+        if (hasMsTests)
+        {
+            code = new MsTestToNUnitContent().TransformMethods(code);
+        }
         var tree = CSharpSyntaxTree.ParseText(code);
 
         var rewriter = new XunitSyntaxRewriter();

@@ -1,12 +1,12 @@
 ﻿using ConversionClassLibrary.Interfaces;
 
-namespace NUnitToXunitConverter.Conversion;
+namespace MsOrNUnitToXunitConverter.Conversion;
 
 public class NUnitTestDetector : IUnitTestDetector
 {
     public File File { get; set; } = System.IO.InputOutput.Instance.File;
 
-    public bool IsNUnitTest(string file)
+    public bool IsUnitTest(string file)
     {
         var text = File.ReadAllText(file);
 

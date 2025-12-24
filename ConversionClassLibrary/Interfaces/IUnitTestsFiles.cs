@@ -4,6 +4,6 @@ public interface IUnitTestsFiles
 {
     File File { get; set; }
     IProjectScanner ProjectScanner { get; set; }
-    IUnitTestDetector NUnitTestDetector { get; set; }
-    string[] GetNUnitCsFiles(string csprojPath);
+    IUnitTestDetector UnitTestDetector { get; set; }
+    string[] GetUnitTestCsFiles(string csprojPath);
 }

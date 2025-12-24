@@ -4,7 +4,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using static Microsoft.CodeAnalysis.CSharp.SyntaxFactory;
 
-namespace NUnitToXunitConverter.Conversion;
+namespace MsOrNUnitToXunitConverter.Conversion;
 
 public class XunitSyntaxRewriter : CSharpSyntaxRewriter
 {
@@ -242,7 +242,7 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
         var method = ma.Name.Identifier.Text;
         var args = node.ArgumentList.Arguments;
 
-        string? target = method switch
+        var target = method switch
         {
             "AreEqual" => "Equal",
             "AreNotEqual" => "NotEqual",

@@ -1,9 +1,8 @@
 ﻿using System.Diagnostics;
-using NUnitToXunitConverter.Conversion;
-using NUnitToXUnitConverter.Conversion;
+using MsOrNUnitToXunitConverter.Conversion;
 using ProjectsLibrary;
 
-namespace NUnitToXunitConverter;
+namespace MsOrNUnitToXunitConverter;
 
 public class Program
 {
@@ -15,7 +14,7 @@ public class Program
         LoggerFactoryContainer.Instance.LoggerFactory = ConsoleLoggerFactory.Instance;
         if (args.Length == 0 || !File.Exists(args[0]))
         {
-            LoggerFactoryContainer.Instance.LoggerFactory.Info("Usage: NUnitToXunitConverter <path-to-csproj>");
+            LoggerFactoryContainer.Instance.LoggerFactory.Info("Usage: MsOrNUnitToXunitConverter <path-to-csproj>");
             return 1;
         }
 
@@ -25,7 +24,16 @@ public class Program
         new ProjectRestoreService().RestoreBackupIfExists(csprojPath);
 
         // 2️ Scan project AFTER restore
-        var projectFiles = new NUnitFiles().GetNUnitCsFiles(csprojPath);
+        var projectFiles = new UnitTestsFiles(new NUnitTestDetector()).GetUnitTestCsFiles(csprojPath);
+        bool hasMsTests=false;
+        if (projectFiles.Length == 0)
+        {
+            projectFiles = new UnitTestsFiles(new MsUnitTestDetector()).GetUnitTestCsFiles(csprojPath);
+            if (projectFiles.Length > 0)
+            {
+                hasMsTests = true;
+            }
+        }
 
         // 3️ Create fresh backup
         new ProjectBackupService().CreateBackup(csprojPath, projectFiles);
@@ -34,7 +42,7 @@ public class Program
         foreach (var file in projectFiles)
         {
             LoggerFactoryContainer.Instance.LoggerFactory.Info($"Converting: {file}");
-            new NUnitToXunitRewriter().RewriteFile(file);
+            new NUnitToXunitRewriter(hasMsTests).RewriteFile(file);
         }
 
         LoggerFactoryContainer.Instance.LoggerFactory.Info("Conversion complete.");

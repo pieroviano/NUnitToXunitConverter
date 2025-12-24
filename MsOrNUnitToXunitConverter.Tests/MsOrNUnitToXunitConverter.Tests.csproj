@@ -16,7 +16,7 @@
 
 	<ItemGroup>
 	  <ProjectReference Include="..\ConversionClassLibrary\ConversionClassLibrary.csproj" />
-	  <ProjectReference Include="..\NUnitToXunitConverter\NUnitToXUnitConverter.csproj" />
+	  <ProjectReference Include="..\MsOrNUnitToXunitConverter\MsOrNUnitToXunitConverter.csproj" />
 	  <ProjectReference Include="..\ProjectsLibrary\ProjectsLibrary.csproj" />
 	</ItemGroup>
 

@@ -3,5 +3,5 @@
 public interface IUnitTestDetector
 {
     File File { get; set; }
-    bool IsNUnitTest(string file);
+    bool IsUnitTest(string file);
 }

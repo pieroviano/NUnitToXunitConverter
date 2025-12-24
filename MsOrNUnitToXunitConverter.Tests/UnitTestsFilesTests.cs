@@ -1,18 +1,18 @@
 using System.Linq;
 using NSubstitute;
 using Xunit;
-using NUnitToXUnitConverter.Conversion;
 using ConversionClassLibrary.Interfaces;
+using MsOrNUnitToXunitConverter.Conversion;
 
 namespace NUnitToXunitConverter.Tests;
 
-public class NUnitFilesTests
+public class UnitTestsFilesTests
 {
     [Fact]
     public void GetNUnitCsFiles_FiltersByDetector_AndOrdersOneTimeSetUpFirst()
     {
         // Arrange
-        var sut = new NUnitFiles();
+        var sut = new UnitTestsFiles(new NUnitTestDetector());
 
         var scanner = Substitute.For<IProjectScanner>();
         var detector = Substitute.For<IUnitTestDetector>();
@@ -22,7 +22,7 @@ public class NUnitFilesTests
         var file = Substitute.For<IFile>();
 
         sut.ProjectScanner = scanner;
-        sut.NUnitTestDetector = detector;
+        sut.UnitTestDetector = detector;
         sut.File = file;
 
         var csprojPath = "path/to/project.csproj";
@@ -33,15 +33,15 @@ public class NUnitFilesTests
 
         scanner.GetCsFiles(csprojPath).Returns(new[] { f1, f2, f3 });
 
-        detector.IsNUnitTest(f1).Returns(true);
-        detector.IsNUnitTest(f2).Returns(false);
-        detector.IsNUnitTest(f3).Returns(true);
+        detector.IsUnitTest(f1).Returns(true);
+        detector.IsUnitTest(f2).Returns(false);
+        detector.IsUnitTest(f3).Returns(true);
 
         file.ReadAllText(f1).Returns("using NUnit.Framework; class A { [OneTimeSetUp] public void Init() {} }");
         file.ReadAllText(f3).Returns("using NUnit.Framework; class C { [Test] public void T() {} }");
 
         // Act
-        var result = sut.GetNUnitCsFiles(csprojPath);
+        var result = sut.GetUnitTestCsFiles(csprojPath);
 
         // Assert
         Assert.Equal(2, result.Length);
@@ -51,9 +51,9 @@ public class NUnitFilesTests
 
         // verify the dependencies were called as expected
         scanner.Received(1).GetCsFiles(csprojPath);
-        detector.Received(1).IsNUnitTest(f1);
-        detector.Received(1).IsNUnitTest(f2);
-        detector.Received(1).IsNUnitTest(f3);
+        detector.Received(1).IsUnitTest(f1);
+        detector.Received(1).IsUnitTest(f2);
+        detector.Received(1).IsUnitTest(f3);
         file.Received(1).ReadAllText(f1);
         file.Received(1).ReadAllText(f3);
     }
@@ -62,14 +62,14 @@ public class NUnitFilesTests
     public void GetNUnitCsFiles_ReturnsEmpty_WhenNoNUnitFilesFound()
     {
         // Arrange
-        var sut = new NUnitFiles();
+        var sut = new UnitTestsFiles(new NUnitTestDetector());
 
         var scanner = Substitute.For<IProjectScanner>();
         var detector = Substitute.For<IUnitTestDetector>();
         var file = Substitute.For<IFile>();
 
         sut.ProjectScanner = scanner;
-        sut.NUnitTestDetector = detector;
+        sut.UnitTestDetector = detector;
         sut.File = file;
 
         var csprojPath = "p.csproj";
@@ -77,17 +77,17 @@ public class NUnitFilesTests
 
         scanner.GetCsFiles(csprojPath).Returns(files);
 
-        detector.IsNUnitTest(Arg.Any<string>()).Returns(false);
+        detector.IsUnitTest(Arg.Any<string>()).Returns(false);
 
         // Act
-        var result = sut.GetNUnitCsFiles(csprojPath);
+        var result = sut.GetUnitTestCsFiles(csprojPath);
 
         // Assert
         Assert.Empty(result);
 
         scanner.Received(1).GetCsFiles(csprojPath);
-        detector.Received(1).IsNUnitTest("A.cs");
-        detector.Received(1).IsNUnitTest("B.cs");
+        detector.Received(1).IsUnitTest("A.cs");
+        detector.Received(1).IsUnitTest("B.cs");
         // No reads should be performed because detector returned false for all
         file.DidNotReceive().ReadAllText(Arg.Any<string>());
     }

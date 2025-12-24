@@ -1,6 +1,6 @@
+using MsOrNUnitToXunitConverter.Conversion;
 using NSubstitute;
 using Xunit;
-using NUnitToXunitConverter.Conversion;
 
 namespace NUnitToXunitConverter.Tests;
 
@@ -10,7 +10,7 @@ public class NUnitToXunitRewriterTests
     public void RewriteFile_ConvertsNUnit_using_and_attributes_and_asserts_to_xunit_equivalents()
     {
         // Arrange
-        var sut = new NUnitToXunitRewriter();
+        var sut = new NUnitToXunitRewriter(false);
         var file = Substitute.For<IFile>();
         sut.File = file;
 
@@ -60,7 +60,7 @@ namespace Tests
     public void RewriteFile_WritesOutputEvenForEmptyFile()
     {
         // Arrange
-        var sut = new NUnitToXunitRewriter();
+        var sut = new NUnitToXunitRewriter(false);
         var file = Substitute.For<IFile>();
         sut.File = file;
 

@@ -3,33 +3,43 @@
     <Import Project="$(NuGetPackageRoot)net4x.nugetutility/$(NuGetUtilityVersion)/build/NuGet.Utility.props" Condition="Exists('$(NuGetPackageRoot)net4x.nugetutility/$(NuGetUtilityVersion)/build/NuGet.Utility.props')" />
     <PropertyGroup>
         <PackageOutputPath>$(SolutionDir)Packages/</PackageOutputPath>
-        <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+        <GeneratePackageOnBuild>False</GeneratePackageOnBuild>
         <Version>$(VersionPrefix).$(VersionSuffix)</Version>
-        <TargetFramework>net8.0</TargetFramework>
+        <TargetFramework>net8.0-windows</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <SignAssembly>true</SignAssembly>
-        <DelaySign>false</DelaySign>
-        <AssemblyOriginatorKeyFile>..\AsyncBridgeKey.snk</AssemblyOriginatorKeyFile>
-        <PackageId>Net4x.$(MSBuildProjectName)</PackageId>
-        <NoWarn>NU5118</NoWarn>
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+        <LangVersion>latest</LangVersion>
+        <NoWarn>CS1696</NoWarn>
     </PropertyGroup>
     <ItemGroup>
-        <PackageReference Include="Net4x.BaseTypes" Version="$(Net4xBaseTypesVersion).$(VersionBuildSuffix)" />
-        <PackageReference Include="Net4x.NuGetUtility" Version="$(NuGetUtilityVersion)" PrivateAssets="All" />
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.6.0" />
         <PackageReference Include="Net4x.StandardTypesWrappers" Version="$(WrapperGeneratorVersion).$(VersionBuildSuffix)" />
+        <PackageReference Include="Net4x.XunitTests" Version="$(Net4xMsTestsVersion).$(VersionBuildSuffix)" />
+        <PackageReference Include="Net4x.NuGetUtility" Version="$(NuGetUtilityVersion)" PrivateAssets="All" />
     </ItemGroup>
     <ItemGroup>
-        <ProjectReference Include="..\ConversionClassLibrary\ConversionClassLibrary.csproj" />
+        <Compile Update="Resources.Designer.cs">
+            <DependentUpon>Resources.resx</DependentUpon>
+            <DesignTime>True</DesignTime>
+            <AutoGen>True</AutoGen>
+        </Compile>
     </ItemGroup>
     <ItemGroup>
-        <None Include="README.md" Link="README.md" Pack="true" PackagePath="\README.md" />
+        <EmbeddedResource Update="Resources.resx">
+            <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+            <Generator>ResXFileCodeGenerator</Generator>
+        </EmbeddedResource>
     </ItemGroup>
     <PropertyGroup>
         <PackageReadmeFile>README.md</PackageReadmeFile>
     </PropertyGroup>
     <ItemGroup>
         <None Include="README.md" Link="README.md" Pack="true" PackagePath="\README.md" />
+    </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\ConversionClassLibrary\ConversionClassLibrary.csproj" />
     </ItemGroup>
     <Import Project="$(NuGetPackageRoot)net4x.nugetutility/$(NuGetUtilityVersion)/build/NuGet.Utility.targets" Condition="Exists('$(NuGetPackageRoot)net4x.nugetutility/$(NuGetUtilityVersion)/build/NuGet.Utility.targets')" />
 </Project>
