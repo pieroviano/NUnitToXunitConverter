@@ -13,6 +13,9 @@ public class NUnitTestDetector : IUnitTestDetector
         return text.Contains("NUnit.Framework")
                || text.Contains("[Test]")
                || text.Contains("[TestFixture]")
-               || text.Contains("[TestCase]");
+               || text.Contains("[TestCase]")
+               || text.Contains("[assembly: Parallelizable")
+               || text.Contains("[assembly: LevelOfParallelism")
+               || text.Contains("[assembly: FixtureLifeCycle");
     }
 }

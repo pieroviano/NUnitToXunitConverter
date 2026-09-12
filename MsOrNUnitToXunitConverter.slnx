@@ -2,6 +2,7 @@
   <Folder Name="/Solution Items/">
     <File Path=".gitignore" />
     <File Path="CLAUDE.md" />
+    <File Path="CONVERSION-GAPS.md" />
     <File Path="Directory.Build.Props" />
     <File Path="Directory.NuGet.props" />
     <File Path="LICENSE.md" />

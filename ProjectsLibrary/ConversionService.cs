@@ -7,6 +7,18 @@ namespace ProjectsLibrary
 {
     public class ConversionService : IConversionService
     {
+        public File File { get; set; } = System.IO.InputOutput.Instance.File;
+
+        /// <summary>
+        /// Attributes that declare assembly-wide setup. Whether the project has any has to be known before
+        /// the first file is rewritten, because it decides whether every *other* file's test classes join
+        /// the generated collection.
+        /// </summary>
+        private static readonly string[] AssemblyFixtureMarkers =
+        [
+            "[AssemblyInitialize", "[AssemblyCleanup", "[SetUpFixture"
+        ];
+
         public ConversionResult DoConversion(string csprojPath, bool forceMsTestProject)
         {
             var logger = LoggerFactoryContainer.Instance.LoggerFactory;
@@ -16,17 +28,17 @@ namespace ProjectsLibrary
             // 1️ Restore previous backup if present
             new ProjectRestoreService().RestoreBackupIfExists(csprojPath);
 
-            // 2️ Scan project AFTER restore
-            var projectFiles = new UnitTestsFiles(new NUnitTestDetector()).GetUnitTestCsFiles(csprojPath);
+            // 2️ Scan project AFTER restore. Both detectors, not one or the other: a part-migrated
+            // project holding both frameworks used to convert whichever was found first and leave the rest
+            // of the files untouched.
+            IUnitTestDetector detector = forceMsTestProject
+                ? new MsUnitTestDetector()
+                : new AnyFrameworkTestDetector();
 
-            if (projectFiles.Length == 0 || forceMsTestProject)
-            {
-                logger.Info(forceMsTestProject
-                    ? "Scanning for MSTest test files: the MSTest project conversion was forced."
-                    : "No NUnit test files found, scanning for MSTest test files instead.");
+            if (forceMsTestProject)
+                logger.Info("Scanning for MSTest test files only: the MSTest project conversion was forced.");
 
-                projectFiles = new UnitTestsFiles(new MsUnitTestDetector()).GetUnitTestCsFiles(csprojPath);
-            }
+            var projectFiles = new UnitTestsFiles(detector).GetUnitTestCsFiles(csprojPath);
 
             if (projectFiles.Length == 0)
             {
@@ -59,10 +71,20 @@ namespace ProjectsLibrary
                     : $"Test packages already reference xUnit, left unchanged: {csprojPath}");
 
                 // 5️ Run conversion
+                var rewriter = new NUnitToXunitRewriter();
+
+                rewriter.Context.ProjectHasAssemblyFixture = projectFiles.Any(HasAssemblyFixture);
+
+                if (rewriter.Context.ProjectHasAssemblyFixture)
+                {
+                    logger.Info(
+                        "Assembly-wide setup found: every test class will join the generated collection.");
+                }
+
                 foreach (var file in projectFiles)
                 {
                     logger.Info($"Converting: {file}");
-                    new NUnitToXunitRewriter().RewriteFile(file);
+                    rewriter.RewriteFile(file);
                 }
             }
             catch
@@ -88,6 +110,14 @@ namespace ProjectsLibrary
             logger.Info($"Conversion complete, {projectFiles.Length} file(s) rewritten.");
 
             return new ConversionResult(csprojPath, projectFiles, packagesUpdated);
+        }
+
+        private bool HasAssemblyFixture(string file)
+        {
+            var text = File.ReadAllText(file);
+
+            return AssemblyFixtureMarkers.Any(marker =>
+                text.Contains(marker, StringComparison.Ordinal));
         }
     }
 }

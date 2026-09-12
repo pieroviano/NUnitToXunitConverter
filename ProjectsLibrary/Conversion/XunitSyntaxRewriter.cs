@@ -1,4 +1,5 @@
-﻿using ConversionClassLibrary;
+﻿using System.Diagnostics;
+using ConversionClassLibrary;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -9,18 +10,23 @@ namespace ProjectsLibrary.Conversion;
 public class XunitSyntaxRewriter : CSharpSyntaxRewriter
 {
     private bool _currentMethodIsAsync;
-    private bool _hasSetUp;
-    private bool _hasTearDown;
-    private bool _hasOneTimeSetUp;
+
+    // Per file.
     private bool _needsOutputHelper;
     private bool _needsLinq;
+    private Framework _sourceFramework = Framework.Unknown;
+    private readonly List<MemberDeclarationSyntax> _generatedTypes = [];
 
-    private MethodDeclarationSyntax? _setUpMethod;
-    private MethodDeclarationSyntax? _tearDownMethod;
-    private MethodDeclarationSyntax? _oneTimeSetUpMethod;
-
+    // Per class, reset on entry to every class declaration. Left set, they grafted one class's setup and
+    // teardown onto the next class in the same file - ordinary in both frameworks, and it did not compile.
+    private readonly Dictionary<Lifecycle, List<StatementSyntax>> _lifecycleBodies = [];
     private string? _testClassName;
-    internal OneTimeSetUpContext OneTimeSetUpContext = new OneTimeSetUpContext();
+
+    /// <summary>
+    /// Shared by every file of one project, so assembly-wide setup declared in one file can be joined by the
+    /// test classes in the others.
+    /// </summary>
+    public OneTimeSetUpContext OneTimeSetUpContext { get; set; } = new OneTimeSetUpContext();
 
     // ---------------- USING ----------------
 
@@ -44,14 +50,28 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
     {
         var name = node.Name.ToString();
 
+        // Lifecycle hooks become constructors, Dispose methods and fixture classes, so their attributes go.
+        if (LifecycleMethods.AttributeNames.Contains(name))
+            return null;
+
+        // Re-expressed as Skip, Timeout, Trait or MemberData on the declaration itself.
+        if (AttributeTranslator.Consumed.Contains(name))
+            return null;
+
+        // Assembly-level parallelism settings, re-expressed as [assembly: CollectionBehavior] where xUnit
+        // has an equivalent and dropped where it has none.
+        if (AssemblySettings.Names.Contains(name))
+            return null;
+
         return name switch
         {
             // NUnit
             "Test" => node.WithName(IdentifierName("Fact")),
             "TestCase" => node.WithName(IdentifierName("InlineData")),
-            "TestFixture" => null,
+            // A parameterised [TestFixture(1)] has no xUnit equivalent. Dropping it silently discarded the
+            // parameterisation, so it is left in place to fail visibly instead.
+            "TestFixture" => node.ArgumentList == null ? null : base.VisitAttribute(node),
             "SetUpFixture" => null,
-            "OneTimeSetUp" => null,
             // MSTest
             "TestMethod" => node.WithName(IdentifierName("Fact")),
             "DataRow" => node.WithName(IdentifierName("InlineData")),
@@ -79,39 +99,41 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
 
     // ---------------- CLASS ----------------
 
-    public override SyntaxNode VisitClassDeclaration(ClassDeclarationSyntax node)
+    public override SyntaxNode? VisitClassDeclaration(ClassDeclarationSyntax node)
     {
+        var enclosingClassName = _testClassName;
+        var enclosingNeedsOutputHelper = _needsOutputHelper;
+
+        _lifecycleBodies.Clear();
+        _needsOutputHelper = false;
         _testClassName = node.Identifier.Text;
 
-        foreach (var method in node.Members.OfType<MethodDeclarationSyntax>())
-        {
-            foreach (var attr in method.AttributeLists.SelectMany(a => a.Attributes))
-            {
-                switch (attr.Name.ToString())
-                {
-                    case "SetUp":
-                    case "TestInitialize":
-                        _hasSetUp = true;
-                        _setUpMethod = method;
-                        break;
-                    case "TearDown":
-                    case "TestCleanup":
-                        _hasTearDown = true;
-                        _tearDownMethod = method;
-                        break;
-                    case "OneTimeSetUp":
-                        _hasOneTimeSetUp = true;
-                        _oneTimeSetUpMethod = method;
-                        break;
-                }
-            }
-        }
+        // Recognised on the original class, where the attributes still are; removed from the rewritten
+        // members by signature, because those are different node instances.
+        var lifecycle = LifecycleMethods.Find(node);
 
         var newNode = (ClassDeclarationSyntax)base.VisitClassDeclaration(node)!;
 
-        var members = newNode.Members
-            .Where(m => m != _setUpMethod && m != _tearDownMethod && m != _oneTimeSetUpMethod)
-            .ToList();
+        var members = new List<MemberDeclarationSyntax>();
+
+        foreach (var member in newNode.Members)
+        {
+            // The body is taken from the rewritten method, so asserts inside a setup are converted too.
+            if (member is MethodDeclarationSyntax method &&
+                lifecycle.TryGetValue(LifecycleMethods.SignatureOf(method), out var kind))
+            {
+                if (method.Body != null)
+                    Bodies(kind).AddRange(method.Body.Statements);
+
+                continue;
+            }
+
+            // MSTest's TestContext is replaced by ITestOutputHelper, so its property goes with it.
+            if (member is PropertyDeclarationSyntax property && property.Type.ToString() == "TestContext")
+                continue;
+
+            members.Add(member);
+        }
 
         // ---- ITestOutputHelper field ----
         if (_needsOutputHelper)
@@ -127,8 +149,12 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
                     Token(SyntaxKind.ReadOnlyKeyword))));
         }
 
-        // ---- Constructor (SetUp) ----
-        if (_hasSetUp || _needsOutputHelper)
+        // ---- Constructor (per-test setup) ----
+        // Presence of the hook decides, not whether its body happens to be empty: an empty [OneTimeSetUp]
+        // still means the class had one, and dropping its fixture would change what the class declares.
+        var instanceSetUp = StatementsOf(Lifecycle.InstanceSetUp);
+
+        if (Has(Lifecycle.InstanceSetUp) || _needsOutputHelper)
         {
             var ctorBody = new List<StatementSyntax>();
 
@@ -142,8 +168,7 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
                             IdentifierName("output"))));
             }
 
-            if (_hasSetUp && _setUpMethod != null)
-                ctorBody.AddRange(_setUpMethod.Body!.Statements);
+            ctorBody.AddRange(instanceSetUp);
 
             members.Insert(0,
                 ConstructorDeclaration(_testClassName!)
@@ -158,55 +183,129 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
                 .WithBody(Block(ctorBody)));
         }
 
-        // ---- Dispose (TearDown) ----
-        if (_hasTearDown && _tearDownMethod != null)
+        // ---- Dispose (per-test teardown) ----
+        var instanceTearDown = StatementsOf(Lifecycle.InstanceTearDown);
+
+        if (Has(Lifecycle.InstanceTearDown))
         {
             members.Add(
                 MethodDeclaration(
                     PredefinedType(Token(SyntaxKind.VoidKeyword)), "Dispose")
                 .WithModifiers(TokenList(Token(SyntaxKind.PublicKeyword)))
-                .WithBody(_tearDownMethod.Body!));
+                .WithBody(Block(instanceTearDown)));
 
             newNode = AddInterface(newNode, "System.IDisposable");
         }
 
-        // ---- OneTimeSetUp fixture ----
-        if (_hasOneTimeSetUp && OneTimeSetUpContext.FixtureClassName == null)
+        // ---- Per-class fixture ----
+        var classSetUp = StatementsOf(Lifecycle.ClassSetUp);
+        var classTearDown = StatementsOf(Lifecycle.ClassTearDown);
+
+        if (Has(Lifecycle.ClassSetUp) || Has(Lifecycle.ClassTearDown))
         {
-            OneTimeSetUpContext.FixtureClassName = $"{_testClassName}Fixture";
+            var fixtureName = $"{_testClassName}Fixture";
+
+            OneTimeSetUpContext.FixtureClassName ??= fixtureName;
+            _generatedTypes.Add(FixtureBuilder.Fixture(fixtureName, classSetUp, classTearDown));
+
+            newNode = AddInterface(newNode, $"IClassFixture<{fixtureName}>");
         }
 
-        if (!string.IsNullOrEmpty(OneTimeSetUpContext.FixtureClassName))
+        // ---- Assembly-wide fixture ----
+        var assemblySetUp = StatementsOf(Lifecycle.AssemblySetUp);
+        var assemblyTearDown = StatementsOf(Lifecycle.AssemblyTearDown);
+        var heldAssemblyHooks = Has(Lifecycle.AssemblySetUp) || Has(Lifecycle.AssemblyTearDown);
+
+        // One assembly, one fixture. A project declaring assembly-wide setup twice - MSTest's
+        // [AssemblyInitialize] in one file and NUnit's [SetUpFixture] in another - would otherwise emit two
+        // types of the same name, so the second is reported rather than silently merged or duplicated.
+        if (heldAssemblyHooks && OneTimeSetUpContext.AssemblyCollectionEmitted)
         {
-            newNode = AddInterface(
-                newNode,
-                $"IClassFixture<{OneTimeSetUpContext.FixtureClassName}>");
+            LoggerFactoryContainer.Instance.LoggerFactory.Warn(
+                $"{_testClassName} declares assembly-wide setup, but the project already has some. " +
+                "Its body has been left out of the generated fixture and needs merging by hand.");
+
+            heldAssemblyHooks = false;
+        }
+        else if (heldAssemblyHooks)
+        {
+            _generatedTypes.Add(FixtureBuilder.Fixture(
+                FixtureBuilder.AssemblyFixtureName, assemblySetUp, assemblyTearDown));
+
+            _generatedTypes.Add(FixtureBuilder.AssemblyCollectionDefinition());
+            OneTimeSetUpContext.AssemblyCollectionEmitted = true;
         }
 
         newNode = newNode.WithMembers(List(members));
+
+        // [Category] and friends on the class itself become class-level traits.
+        foreach (var trait in AttributeTranslator.Traits(node.AttributeLists))
+            newNode = newNode.WithAttributeLists(newNode.AttributeLists.Add(trait));
+
+        _testClassName = enclosingClassName;
+        _needsOutputHelper |= enclosingNeedsOutputHelper;
+        _lifecycleBodies.Clear();
+
+        // A class that held nothing but the assembly-wide hooks has been replaced by the generated fixture.
+        if (heldAssemblyHooks && members.Count == 0)
+            return null;
+
+        // Everything else joins the collection: it is the only way xUnit shares one fixture instance across
+        // every test class, which is what [AssemblyInitialize] and [SetUpFixture] mean.
+        if (OneTimeSetUpContext.ProjectHasAssemblyFixture && !HasClassAttribute(newNode, "Collection"))
+        {
+            newNode = newNode.WithAttributeLists(
+                newNode.AttributeLists.Add(FixtureBuilder.AssemblyCollectionAttribute()));
+        }
+
         return newNode;
+    }
+
+    /// <summary>The hook's statements, creating the entry - which is what records that the hook exists.</summary>
+    private List<StatementSyntax> Bodies(Lifecycle lifecycle)
+    {
+        if (!_lifecycleBodies.TryGetValue(lifecycle, out var statements))
+            _lifecycleBodies[lifecycle] = statements = [];
+
+        return statements;
+    }
+
+    private bool Has(Lifecycle lifecycle)
+    {
+        return _lifecycleBodies.ContainsKey(lifecycle);
+    }
+
+    /// <summary>Reads without recording, so asking does not make the hook appear to exist.</summary>
+    private IReadOnlyList<StatementSyntax> StatementsOf(Lifecycle lifecycle)
+    {
+        return _lifecycleBodies.TryGetValue(lifecycle, out var statements) ? statements : [];
+    }
+
+    private static bool HasClassAttribute(ClassDeclarationSyntax node, string name)
+    {
+        return node.AttributeLists
+            .SelectMany(list => list.Attributes)
+            .Any(attribute => attribute.Name.ToString() == name);
     }
 
     // ---------------- FIXTURE GENERATION ----------------
 
     public override SyntaxNode VisitCompilationUnit(CompilationUnitSyntax node)
     {
+        // Settled before the members are visited: StringAssert has the same member names in both
+        // frameworks with the arguments the other way round, so the translation needs to know which is which.
+        _sourceFramework = SourceFramework.Of(node);
+
         var newNode = (CompilationUnitSyntax)base.VisitCompilationUnit(node)!;
 
-        if (_hasOneTimeSetUp &&
-            _oneTimeSetUpMethod != null &&
-            OneTimeSetUpContext.FixtureClassName == $"{_testClassName}Fixture")
-        {
-            var fixture =
-                ClassDeclaration(OneTimeSetUpContext.FixtureClassName)
-                .WithModifiers(TokenList(Token(SyntaxKind.PublicKeyword)))
-                .WithMembers(
-                    SingletonList<MemberDeclarationSyntax>(
-                        ConstructorDeclaration(OneTimeSetUpContext.FixtureClassName)
-                        .WithModifiers(TokenList(Token(SyntaxKind.PublicKeyword)))
-                        .WithBody(_oneTimeSetUpMethod.Body!)));
+        newNode = WithGeneratedTypes(newNode);
 
-            newNode = newNode.AddMembers(fixture);
+        var collectionBehavior = AssemblySettings.CollectionBehavior(node.AttributeLists);
+
+        if (collectionBehavior != null)
+        {
+            newNode = WithUsing(newNode, "Xunit");
+            newNode = newNode.WithAttributeLists(newNode.AttributeLists.Add(collectionBehavior));
         }
 
         // The generated code reaches for namespaces the source file had no reason to import.
@@ -240,18 +339,38 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
         if (expectedException != null && rewritten.Body != null)
         {
             rewritten = rewritten.WithBody(
-                Block(ThrowsAssert(expectedException, rewritten.Body, isAsync)));
+                Block(ThrowsAssert(expectedException, rewritten.Body, isAsync, AllowsDerived(node))));
         }
 
-        // [InlineData] makes a method data-driven, and xUnit discovers those through [Theory] - [Fact]
-        // alongside it is an error. MSTest always pairs [DataRow] with [TestMethod], but NUnit's [TestCase]
-        // stands on its own, so there may be no [Fact] to rename and the [Theory] has to be added.
-        if (HasAttribute(rewritten, "InlineData") && !HasAttribute(rewritten, "Theory"))
+        // [TestCaseSource]/[DynamicData] were dropped by VisitAttribute; their [MemberData] goes on here.
+        foreach (var memberData in AttributeTranslator.MemberData(node.AttributeLists))
+            rewritten = rewritten.WithAttributeLists(rewritten.AttributeLists.Add(memberData));
+
+        // [Category], [Priority], [Owner] and the rest become traits.
+        foreach (var trait in AttributeTranslator.Traits(node.AttributeLists))
+            rewritten = rewritten.WithAttributeLists(rewritten.AttributeLists.Add(trait));
+
+        // An NUnit [TestCase(..., ExpectedResult = x)] returns the value under test; xUnit theories are void,
+        // so the expectation becomes a parameter and an assert.
+        rewritten = ExpectedResult.Rewrite(rewritten);
+
+        // [InlineData]/[MemberData] make a method data-driven, and xUnit discovers those through [Theory] -
+        // [Fact] alongside one is an error. MSTest always pairs [DataRow] with [TestMethod], but NUnit's
+        // [TestCase] stands on its own, so there may be no [Fact] to rename and [Theory] has to be added.
+        if ((HasAttribute(rewritten, "InlineData") || HasAttribute(rewritten, "MemberData")) &&
+            !HasAttribute(rewritten, "Theory"))
         {
             rewritten = HasAttribute(rewritten, "Fact")
                 ? RenameAttribute(rewritten, "Fact", "Theory")
                 : AddAttribute(rewritten, "Theory");
         }
+
+        // Skip and Timeout are named arguments of the [Fact]/[Theory] that now exists.
+        rewritten = rewritten.WithAttributeLists(
+            AttributeTranslator.WithFactArguments(
+                rewritten.AttributeLists,
+                AttributeTranslator.SkipReason(node.AttributeLists),
+                AttributeTranslator.Timeout(node.AttributeLists)));
 
         // Awaits introduced above (or by VisitExpressionStatement) need the method to be async.
         if (isAsync &&
@@ -327,7 +446,27 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
     /// <c>Assert.Throws&lt;T&gt;(() => { body })</c> for synchronous ones. The body moves across unchanged,
     /// so any await it already contains keeps working inside the async delegate.
     /// </summary>
-    private static StatementSyntax ThrowsAssert(TypeSyntax exceptionType, BlockSyntax body, bool isAsync)
+    /// <summary>
+    /// Whether <c>[ExpectedException(typeof(T), AllowDerivedTypes = true)]</c> was asked for. It is the
+    /// difference between xUnit's <c>Assert.Throws&lt;T&gt;</c>, which demands that exact type, and
+    /// <c>Assert.ThrowsAny&lt;T&gt;</c>, which accepts a subclass.
+    /// </summary>
+    private static bool AllowsDerived(MethodDeclarationSyntax node)
+    {
+        return node.AttributeLists
+            .SelectMany(list => list.Attributes)
+            .Where(attribute => attribute.Name.ToString() == "ExpectedException")
+            .SelectMany(attribute => attribute.ArgumentList?.Arguments ?? default)
+            .Any(argument =>
+                argument.NameEquals?.Name.Identifier.Text == "AllowDerivedTypes" &&
+                argument.Expression.IsKind(SyntaxKind.TrueLiteralExpression));
+    }
+
+    private static StatementSyntax ThrowsAssert(
+        TypeSyntax exceptionType,
+        BlockSyntax body,
+        bool isAsync,
+        bool allowDerived = false)
     {
         var lambda = ParenthesizedLambdaExpression().WithBlock(body);
 
@@ -337,7 +476,7 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
         ExpressionSyntax call =
             InvocationExpression(
                     AssertMember(
-                        GenericName(Identifier(isAsync ? "ThrowsAsync" : "Throws"))
+                        GenericName(Identifier(ThrowsName(isAsync, allowDerived)))
                             .WithTypeArgumentList(
                                 TypeArgumentList(SingletonSeparatedList(exceptionType)))))
                 .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(lambda))));
@@ -349,6 +488,15 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
 
     public override SyntaxNode? VisitExpressionStatement(ExpressionStatementSyntax node)
     {
+        // Replacement nodes are built from scratch and so carry no trivia of their own. Without this the
+        // comment or #pragma attached to the statement being replaced disappears with it.
+        return RewriteStatement(node) is { } rewritten && !ReferenceEquals(rewritten, node)
+            ? rewritten.WithTriviaFrom(node)
+            : node;
+    }
+
+    private SyntaxNode? RewriteStatement(ExpressionStatementSyntax node)
+    {
         if (node.Expression is InvocationExpressionSyntax
             {
                 Expression: MemberAccessExpressionSyntax ma
@@ -358,10 +506,11 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
 
             if (ma.Expression.ToString() == "Assert" &&
                 arguments.Count == 3 &&
+                IsFailureMessage(arguments[2].Expression) &&
                 !IsAsyncThrowsAssert(ma.Name.Identifier.Text))
             {
                 return ReportingFailureMessage(
-                    (InvocationExpressionSyntax)VisitInvocationExpression(inv)!,
+                    (InvocationExpressionSyntax)RewriteInvocation(inv)!,
                     SingletonSeparatedList(arguments[2]));
             }
 
@@ -398,9 +547,17 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
         return rewritten;
     }
 
+    private static string ThrowsName(bool isAsync, bool allowDerived)
+    {
+        if (isAsync)
+            return allowDerived ? "ThrowsAnyAsync" : "ThrowsAsync";
+
+        return allowDerived ? "ThrowsAny" : "Throws";
+    }
+
     private static bool IsAsyncThrowsAssert(string methodName)
     {
-        return methodName is "ThrowsAsync" or "ThrowsExceptionAsync";
+        return methodName is "ThrowsAsync" or "ThrowsAnyAsync" or "ThrowsExceptionAsync";
     }
 
     /// <summary>
@@ -431,11 +588,38 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
     }
     public override SyntaxNode? VisitInvocationExpression(InvocationExpressionSyntax node)
     {
+        return RewriteInvocation(node) is { } rewritten && !ReferenceEquals(rewritten, node)
+            ? rewritten.WithTriviaFrom(node)
+            : node;
+    }
+
+    private SyntaxNode? RewriteInvocation(InvocationExpressionSyntax node)
+    {
         if (node.Expression is not MemberAccessExpressionSyntax ma)
             return base.VisitInvocationExpression(node);
 
         if (ma.Expression.ToString() == "CollectionAssert")
             return RewriteCollectionAssert(node) ?? base.VisitInvocationExpression(node);
+
+        if (ma.Expression.ToString() == "StringAssert")
+            return StringAssertTranslator.Rewrite(node, _sourceFramework) ??
+                   base.VisitInvocationExpression(node);
+
+        // MSTest's TestContext exists to write to the test's output, which is exactly ITestOutputHelper.
+        if (ma.Expression.ToString() == "TestContext" &&
+            ma.Name.Identifier.Text is "WriteLine" or "Write")
+        {
+            _needsOutputHelper = true;
+
+            return node.WithExpression(
+                MemberAccessExpression(
+                    SyntaxKind.SimpleMemberAccessExpression,
+                    IdentifierName("_output"),
+                    IdentifierName("WriteLine")));
+        }
+
+        if (ma.Expression.ToString() == "Assert" && ma.Name.Identifier.Text == "That")
+            return ConstraintTranslator.Rewrite(node) ?? base.VisitInvocationExpression(node);
 
         if (ma.Expression.ToString() != "Assert")
             return base.VisitInvocationExpression(node);
@@ -443,7 +627,64 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
         var method = ma.Name.Identifier.Text;
         var args = node.ArgumentList.Arguments;
 
+        // Both frameworks have AreEqual(expected, actual, delta) for floating point. Treating the delta as a
+        // failure message produced _output.WriteLine(0.01), which does not compile and lost the tolerance.
+        if (method == "AreEqual" && args.Count == 3 && !IsFailureMessage(args[2].Expression))
+        {
+            var precision = PrecisionOf(args[2].Expression);
+
+            return precision == null
+                ? base.VisitInvocationExpression(node)
+                : node
+                    .WithExpression(AssertMember(IdentifierName("Equal")))
+                    .WithArgumentList(
+                        ArgumentList(SeparatedList(new[] { args[0], args[1], Argument(precision) })));
+        }
+
+        // NUnit's ordering and sign asserts have no xUnit counterpart, so the comparison is spelled out.
+        var comparison = method switch
+        {
+            "Greater" => SyntaxKind.GreaterThanExpression,
+            "GreaterOrEqual" => SyntaxKind.GreaterThanOrEqualExpression,
+            "Less" => SyntaxKind.LessThanExpression,
+            "LessOrEqual" => SyntaxKind.LessThanOrEqualExpression,
+            _ => SyntaxKind.None
+        };
+
+        if (comparison != SyntaxKind.None && args.Count >= 2)
+        {
+            return AssertCall(
+                "True",
+                Argument(BinaryExpression(comparison, args[0].Expression, args[1].Expression)));
+        }
+
+        var sign = method switch
+        {
+            "Positive" => SyntaxKind.GreaterThanExpression,
+            "Negative" => SyntaxKind.LessThanExpression,
+            _ => SyntaxKind.None
+        };
+
+        if (sign != SyntaxKind.None && args.Count >= 1)
+        {
+            return AssertCall(
+                "True",
+                Argument(BinaryExpression(sign, args[0].Expression, Zero())));
+        }
+
+        if (method is "Zero" or "NotZero" && args.Count >= 1)
+            return AssertCall(method == "Zero" ? "Equal" : "NotEqual", Argument(Zero()), args[0]);
+
         // MSTest passes the expected type as an argument; xUnit takes it as a type argument.
+        if (method is "IsInstanceOfType" or "IsNotInstanceOfType" &&
+            args.Count >= 2 &&
+            args[1].Expression is TypeOfExpressionSyntax notInstanceType)
+        {
+            return AssertCall(
+                GenericAssert(method == "IsInstanceOfType" ? "IsType" : "IsNotType", notInstanceType.Type),
+                args[0]);
+        }
+
         if (method == "IsInstanceOfType" &&
             args.Count >= 2 &&
             args[1].Expression is TypeOfExpressionSyntax typeOf)
@@ -468,6 +709,9 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
             "IsNull" => "Null",
             "IsNotNull" => "NotNull",
             "IsInstanceOf" => "IsType",
+            "IsNotInstanceOf" => "IsNotType",
+            "IsEmpty" => "Empty",
+            "IsNotEmpty" => "NotEmpty",
             "ThrowsException" => "Throws",
             "ThrowsExceptionAsync" => "ThrowsAsync",
             _ => null
@@ -478,6 +722,7 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
 
         // Only the value-comparing asserts take a trailing failure message; Throws takes a delegate.
         var hasMessageArgument = args.Count == 3 &&
+                                 IsFailureMessage(args[2].Expression) &&
                                  target is "Equal" or "NotEqual" or "Same" or "NotSame"
                                      or "True" or "False" or "Null" or "NotNull";
 
@@ -491,6 +736,42 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
                     hasMessageArgument
                         ? SeparatedList(new[] { args[0], args[1] })
                         : args));
+    }
+
+    /// <summary>
+    /// xUnit compares doubles to a number of decimal places, not to a tolerance, so only a delta that is a
+    /// clean power of ten converts exactly. Anything else - a variable, or 0.5 - returns null and the call is
+    /// left alone rather than silently given a different tolerance.
+    /// </summary>
+    private static ExpressionSyntax? PrecisionOf(ExpressionSyntax delta)
+    {
+        if (delta is not LiteralExpressionSyntax literal ||
+            !literal.IsKind(SyntaxKind.NumericLiteralExpression))
+        {
+            return null;
+        }
+
+        var text = literal.Token.Text.TrimEnd('d', 'D', 'f', 'F', 'm', 'M');
+        var separator = text.IndexOf('.');
+
+        if (separator < 0)
+            return null;
+
+        var fraction = text[(separator + 1)..];
+
+        // 0.01 is two places, 0.001 is three; 0.05 is not expressible and is refused.
+        if (text[..separator] != "0" || fraction.Length == 0 || fraction[^1] != '1' ||
+            fraction[..^1].Any(digit => digit != '0'))
+        {
+            return null;
+        }
+
+        return LiteralExpression(SyntaxKind.NumericLiteralExpression, Literal(fraction.Length));
+    }
+
+    private static LiteralExpressionSyntax Zero()
+    {
+        return LiteralExpression(SyntaxKind.NumericLiteralExpression, Literal(0));
     }
 
     private static MemberAccessExpressionSyntax AssertMember(SimpleNameSyntax name)
@@ -706,6 +987,26 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
     }
 
     // ---------------- HELPERS ----------------
+
+    /// <summary>
+    /// Adds the generated fixtures. A block-scoped namespace has to be entered to add them: appended to the
+    /// compilation unit they would land outside it, in a different namespace from the class whose
+    /// <c>IClassFixture&lt;&gt;</c> names them, and would not resolve.
+    /// </summary>
+    private CompilationUnitSyntax WithGeneratedTypes(CompilationUnitSyntax node)
+    {
+        if (_generatedTypes.Count == 0)
+            return node;
+
+        var generated = _generatedTypes.ToArray();
+        _generatedTypes.Clear();
+
+        var blockNamespace = node.Members.OfType<NamespaceDeclarationSyntax>().FirstOrDefault();
+
+        return blockNamespace == null
+            ? node.AddMembers(generated)
+            : node.ReplaceNode(blockNamespace, blockNamespace.AddMembers(generated));
+    }
 
     private static CompilationUnitSyntax WithUsing(CompilationUnitSyntax node, string name)
     {

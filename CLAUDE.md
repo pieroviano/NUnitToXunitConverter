@@ -81,10 +81,10 @@ Three projects, layered by dependency:
 
 1. `ProjectRestoreService.RestoreBackupIfExists` — restores `../Old/<ProjectName>` over the project **before**
    scanning, so re-running is idempotent rather than cumulative. It puts back the `.cs` files, the external
-   files, **and the csproj**: leaving the csproj out used to mean the next `CreateBackup` captured the
-   already-converted csproj, so the original was lost after the second run.
-2. `UnitTestsFiles(new NUnitTestDetector())` scans; if it finds nothing (or `forceMsTestProject`), it rescans
-   with `MsUnitTestDetector`.
+   files, **and the csproj** — the csproj matters, because without it step 3 captures an already-converted
+   csproj and the original is gone from the second run onwards.
+2. `UnitTestsFiles(new AnyFrameworkTestDetector())` scans for both frameworks at once, so a project holding a
+   mixture converts completely; `forceMsTestProject` narrows the scan to `MsUnitTestDetector`.
 3. `ProjectBackupService.CreateBackup` — fresh backup into `../Old/<ProjectName>`.
 4. `TestPackagesRewriter.RewritePackageReferences` — swaps the csproj's test-framework `PackageReference`
    items for the fixed xUnit set (only when the scan actually found test files).
@@ -132,13 +132,36 @@ equivalent) to `Xunit`. The versions live in the settable `XunitPackages` proper
 Because it round-trips through `XDocument`, the whole csproj is re-indented to two spaces on first run; a
 second run over its own output is a no-op and returns `false`.
 
-`XunitSyntaxRewriter` (`ProjectsLibrary/Conversion/XunitSyntaxRewriter.cs`) is the substantive rewriter:
+`XunitSyntaxRewriter` (`ProjectsLibrary/Conversion/XunitSyntaxRewriter.cs`) orchestrates the rewrite and
+delegates the bulky translations to siblings in the same folder: `LifecycleMethods` (finding hooks and
+resolving their scope), `FixtureBuilder` (fixture classes and the collection definition), `AttributeTranslator`
+(`Skip`, `Timeout`, `Trait`, `MemberData`), `ExpectedResult`, `ConstraintTranslator` (`Assert.That`),
+`StringAssertTranslator`, `AssemblySettings`, and `SourceFramework`. Between them:
 `NUnit.Framework`→`Xunit`, `[Test]`→`[Fact]`, `[TestCase]`→`[InlineData]`, `[TestFixture]`/`[SetUpFixture]`/
 `[OneTimeSetUp]` dropped; `[SetUp]` body folded into a generated constructor, `[TearDown]` into a `Dispose`
 method plus `System.IDisposable`, `[OneTimeSetUp]` into a generated `<Class>Fixture` class plus
 `IClassFixture<>`. `Assert.AreEqual/IsTrue/...` map to the xUnit names; a 3-argument assert sets
 `_needsOutputHelper`, which injects an `ITestOutputHelper _output` field and ctor parameter and wraps the
-assert in `try/catch { _output.WriteLine(message); throw; }`.
+assert in `try/catch { _output.WriteLine(message); throw; }` — but only when the third argument *looks* like a
+message (`IsFailureMessage`), because `AreEqual(expected, actual, delta)` is the floating-point overload and
+converts to xUnit's decimal-places argument instead.
+
+Three rules about lifecycle hooks are easy to undo by accident:
+
+- **Hooks are matched by signature, never by node reference.** They have to be recognised on the *original*
+  class, where the attributes still are, but removed from the *rewritten* member list, whose nodes are
+  different instances — `VisitAttributeList` rebuilds every attribute list unconditionally. Comparing
+  references across that boundary silently never matched, so every hook stayed in place, attribute and all,
+  while its body was *also* copied into the generated constructor.
+- **Per-class state is reset on entry to each class.** Left set, one class's setup and teardown were grafted
+  onto the next class in the same file, calling methods it did not have.
+- **Presence of the hook decides, not the size of its body.** An empty `[OneTimeSetUp]` still means the class
+  declared one, and dropping its fixture would change what the class declares.
+
+`[OneTimeSetUp]`/`[ClassInitialize]` become a generated `<Class>Fixture`; `[SetUpFixture]`/`[AssemblyInitialize]`
+are assembly-wide and become a `[CollectionDefinition]` plus `ICollectionFixture<AssemblyFixture>`, with every
+test class in the project joining that collection. That last part is why `OneTimeSetUpContext` is shared across
+the whole project by `ConversionService`: the file declaring the hooks is not the file that has to join.
 
 Once the data-row attributes have become `[InlineData]`, `VisitMethodDeclaration` promotes the method to
 `[Theory]` — xUnit discovers data-driven tests through `[Theory]` and rejects `[Fact]` beside `[InlineData]`.
@@ -147,6 +170,12 @@ stands on its own, in which case the `[Theory]` is added outright. `VisitCompila
 generated code's own namespaces are imported: `Xunit.Abstractions` when `_needsOutputHelper` was set (that is
 where `ITestOutputHelper` lives, not `Xunit`), and `System.Linq` when `_needsLinq` was — each added through
 `WithUsing`, which is a no-op if the file already has it.
+
+`NUnitToXunitRewriter` formats through Roslyn's `Formatter`, not `NormalizeWhitespace()`: the latter rewrote
+the whole file, discarding preprocessor directives and making every conversion a whole-file diff. For the same
+reason `VisitInvocationExpression` and `VisitExpressionStatement` apply `WithTriviaFrom(node)` to anything they
+replace — a constructed node carries no trivia, so without it the comment or `#pragma` attached to the
+statement disappears with it.
 
 It handles MSTest in the same pass — `[TestMethod]`→`[Fact]`, `[DataRow]`→`[InlineData]`, `[TestClass]` dropped,
 `[TestInitialize]`/`[TestCleanup]` folded into the constructor/`Dispose` like their NUnit counterparts, and the
@@ -183,18 +212,21 @@ silently mistranslated.
 
 ### Known gaps in the pipeline (observed, not hypothetical)
 
-- `RewriteFile` ends with `NormalizeWhitespace()`, which reformats the entire file and discards preprocessor
-  trivia — `#pragma warning disable` lines are dropped while their matching `restore` survives.
-- Assembly-level MSTest settings are not converted. `MsTestProjectPoc/MSTestSettings.cs`
-  (`[assembly: Parallelize(...)]`) contains no `[TestClass]`/`[TestMethod]`, so no detector selects it and it is
-  left referencing MSTest types after the packages are swapped — the converted project then fails to compile
-  until that file is deleted by hand.
-- The scalar asserts still take any third argument for a failure message (`CollectionAssert` no longer does —
-  see `IsFailureMessage` above). No `Assert.AreEqual` overload takes a comparer in that position, so this has
-  not bitten, but it is the same syntax-only assumption.
-- `MsTestToNUnitContent` is no longer part of the conversion pipeline. It still ships and is still covered by
-  `MsTestsToNunit.Tests`, but `NUnitToXunitRewriter` does the whole job in Roslyn now; the old regex pre-pass
-  would otherwise have intercepted `[TestMethod, ExpectedException(...)]` before the syntax rewriter saw it.
+[CONVERSION-GAPS.md](CONVERSION-GAPS.md) is the coverage reference, observed by running the real CLI rather
+than inferred: what the converter translates, what it does not, and why. Read it before extending the rewriter
+— in particular, the rule that anything with no xUnit equivalent is left **untouched on purpose**, so the
+converted project fails to compile on it rather than being given something weaker that silently passes.
+
+- Data-generation attributes (`[Values]`, `[Range]`, `[Random]`, `[Combinatorial]`) are not converted: they
+  generate a cartesian product that xUnit has no equivalent for, so converting means computing the rows.
+- `[TestCaseSource]`/`[DynamicData]` have their *attribute* translated to `[MemberData]` but not the source
+  member, which commonly yields `TestCaseData` or `object[]` where xUnit wants `IEnumerable<object[]>`.
+- A test class inheriting its lifecycle from a base class is not handled, and neither is a generic fixture.
+- A project declaring assembly-wide setup twice cannot merge them: the first wins, the second is reported at
+  `Warn`.
+- `MsTestToNUnitContent` is not part of the conversion pipeline. It ships and is covered by
+  `MsTestsToNunit.Tests`, but `NUnitToXunitRewriter` does the whole job in Roslyn; putting the regex pass back
+  in front of it would intercept `[TestMethod, ExpectedException(...)]` before the syntax rewriter saw it.
 
 ## The MCP server
 
@@ -291,8 +323,8 @@ Two traps in that abstraction, both learned the hard way:
 reported through the same log as every other step instead of crashing the process. Nothing is lost by not
 letting it escape: the output template ends in `{Exception}`, so the stack trace is still printed, and the
 console sink is configured with `standardErrorFromLevel: LogEventLevel.Error` — the progress lines go to
-stdout, `Error`/`Fatal` and their stack traces to stderr, which is where an unhandled exception used to land.
-Exit codes are 0 on success and 1 for both a usage error and a failed conversion.
+stdout, `Error`/`Fatal` and their stack traces to stderr, which is where a failure belongs. Exit codes are 0 on
+success and 1 for both a usage error and a failed conversion.
 
 `SerilogLogger` adds no filtering of its own: it maps `DiagnosticLevel` onto `LogEventLevel`, prefixes the
 title when there is one, passes the exception to Serilog rather than flattening it into the text, and routes

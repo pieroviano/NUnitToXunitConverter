@@ -16,6 +16,11 @@ public class MsUnitTestDetector : IUnitTestDetector
                || text.Contains("[TestCleanup]")
                || text.Contains("[TestInitialize]")
                || text.Contains("[TestClassInitialize]")
-               || text.Contains("[TestClassCleanup]");
+               || text.Contains("[TestClassCleanup]")
+               // An assembly-settings file holds no test at all, so nothing selected it and it was left
+               // referencing MSTest after the packages were swapped.
+               || text.Contains("[assembly: Parallelize")
+               || text.Contains("[assembly: DoNotParallelize")
+               || text.Contains("[assembly: ClassCleanupExecution");
     }
 }
