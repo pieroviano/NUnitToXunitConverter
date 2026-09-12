@@ -105,6 +105,14 @@ method plus `System.IDisposable`, `[OneTimeSetUp]` into a generated `<Class>Fixt
 `_needsOutputHelper`, which injects an `ITestOutputHelper _output` field and ctor parameter and wraps the
 assert in `try/catch { _output.WriteLine(message); throw; }`.
 
+Once the data-row attributes have become `[InlineData]`, `VisitMethodDeclaration` promotes the method to
+`[Theory]` — xUnit discovers data-driven tests through `[Theory]` and rejects `[Fact]` beside `[InlineData]`.
+MSTest always pairs `[DataRow]` with `[TestMethod]` so there is a `[Fact]` to rename, but NUnit's `[TestCase]`
+stands on its own, in which case the `[Theory]` is added outright. `VisitCompilationUnit` is where the
+generated code's own namespaces are imported: `Xunit.Abstractions` when `_needsOutputHelper` was set (that is
+where `ITestOutputHelper` lives, not `Xunit`), and `System.Linq` when `_needsLinq` was — each added through
+`WithUsing`, which is a no-op if the file already has it.
+
 It handles MSTest in the same pass — `[TestMethod]`→`[Fact]`, `[DataRow]`→`[InlineData]`, `[TestClass]` dropped,
 `[TestInitialize]`/`[TestCleanup]` folded into the constructor/`Dispose` like their NUnit counterparts, and the
 MSTest `using` mapped to `Xunit`. `[ExpectedException(typeof(T))]` has no xUnit equivalent, so
@@ -112,6 +120,20 @@ MSTest `using` mapped to `Xunit`. `[ExpectedException(typeof(T))]` has no xUnit 
 `await Assert.ThrowsAsync<T>(async () => { … })` when the method is async — the body moves across untouched, so
 awaits it already contains keep working. An unawaited `Assert.ThrowsAsync` inside an async test also gets its
 `await` added, since unawaited it can never fail the test.
+
+`CollectionAssert` (both frameworks) is translated by `RewriteCollectionAssert`, driven by the
+`CollectionAssertArities` table — the member name mapped to how many leading arguments its xUnit rendering
+consumes, so everything past them is the failure message and goes through the same `_output.WriteLine`
+try/catch as the scalar asserts (format arguments included, since `ITestOutputHelper.WriteLine` has a matching
+overload). `AreEqual`/`AreNotEqual`/`IsEmpty`/`IsNotEmpty` are plain renames; `AreEquivalent` becomes
+`Assert.Equivalent` (order-insensitive, xUnit ≥ 2.5); `Contains`/`DoesNotContain` additionally swap their two
+arguments, because `CollectionAssert` names the collection first and xUnit names the element first.
+`AllItemsAreNotNull`, `AllItemsAreInstancesOfType(…, typeof(T))` and `IsSubsetOf` expand into
+`Assert.All(collection, item => …)`, and `AllItemsAreUnique` into `Assert.Equal(c.Distinct().Count(), c.Count())`
+— which sets `_needsLinq`, appending `using System.Linq;` to the compilation unit if it is not already there.
+Members with no xUnit counterpart (`AreNotEquivalent`, `IsNotSubsetOf`, `IsOrdered`, and
+`AllItemsAreInstancesOfType` given a `Type`-valued expression rather than a `typeof`) are deliberately left
+untouched so the converted project fails to compile on them instead of asserting something weaker.
 
 ### Known gaps in the pipeline (observed, not hypothetical)
 
@@ -121,6 +143,12 @@ awaits it already contains keep working. An unawaited `Assert.ThrowsAsync` insid
   (`[assembly: Parallelize(...)]`) contains no `[TestClass]`/`[TestMethod]`, so no detector selects it and it is
   left referencing MSTest types after the packages are swapped — the converted project then fails to compile
   until that file is deleted by hand.
+- The trailing argument of a `CollectionAssert` call is always taken to be a failure message. NUnit's
+  `CollectionAssert.AreEqual(expected, actual, IComparer)` overload therefore converts into
+  `_output.WriteLine(comparer)`, which does not compile. The rewriter is syntax-only, so the argument's type
+  is not knowable; the scalar asserts have always made the same assumption.
+- `AllItemsAreUnique` evaluates its argument twice (`c.Distinct().Count()` and `c.Count()`), so a
+  side-effecting collection expression changes meaning.
 - `MsTestToNUnitContent` is no longer part of the conversion pipeline. It still ships and is still covered by
   `MsTestsToNunit.Tests`, but `NUnitToXunitRewriter` does the whole job in Roslyn now; the old regex pre-pass
   would otherwise have intercepted `[TestMethod, ExpectedException(...)]` before the syntax rewriter saw it.
@@ -146,8 +174,35 @@ Consequences when editing any file in this repo:
 Tests use xUnit + NSubstitute, substituting those properties directly
 (`sut.File = Substitute.For<IFile>()`) rather than through a DI container.
 
-Logging goes through `LoggerFactoryContainer.Instance.LoggerFactory` (Net4x.BaseTypes); `Program` sets it to
-`ConsoleLoggerFactory.Instance`, and libraries assume it is already configured.
+## Logging
+
+Logging goes through `LoggerFactoryContainer.Instance.LoggerFactory` (Net4x.BaseTypes) and libraries assume it
+is already configured; `ConversionService.DoConversion` reads it once into a local and reports each step of the
+pipeline. `Program` installs `SerilogLoggerFactory.Instance`
+(`MsOrNUnitToXUnitConverter/Logging/SerilogLoggerFactory.cs`), a `System.Diagnostics.ILoggerFactory` whose
+`GetLogger` hands out a `SerilogLogger` writing to Serilog's console sink — the same shape
+`CoreLibrary.Logging`'s own `LoggerFactoryInternal` uses. Serilog therefore stays entirely inside the console
+project: neither packaged library references it, so their nupkg dependencies are unaffected.
+
+Two traps in that abstraction, both learned the hard way:
+
+- **`MinimumLoggingLevel` filters with a strict `>`, and `DiagnosticLevel` is not a small ordered enum** — its
+  members are spread across the int range with `None = int.MinValue` and `Default = 0`. `ConsoleLoggerFactory`
+  defaults to `Error`, so while `Program` installed it **the converter printed nothing at all**: every step is
+  logged at `Information`. `SerilogLoggerFactory` defaults to `DiagnosticLevel.Default` instead, which lets
+  every level through to Serilog. Do not "fix" that to `Information` — it would silence `Info` again.
+- **The check is made against the factory installed in the container, not the one the logger came from.**
+  `LoggerWithEvents.DoLog` (the synchronous `ILogger.Log` path) consults
+  `LoggerFactoryContainer.Instance.LoggerFactory.MinimumLoggingLevel`; `DoLogAsync` does not. So a
+  `SerilogLoggerFactory` that has not been installed will appear to swallow everything below `Fatal`, and tests
+  that exercise the synchronous path have to install it first — see
+  `MsOrNUnitToXunitConverter.Tests/SerilogLoggerFactoryTests.cs`.
+
+`SerilogLogger` adds no filtering of its own: it maps `DiagnosticLevel` onto `LogEventLevel`, prefixes the
+title when there is one, passes the exception to Serilog rather than flattening it into the text, and routes
+through `DoLog`/`DoLogAsync` so the `BeforeLogging`/`Logged` events keep working. The message is already
+formatted by the time it arrives, so the template is `{Message:l}` — the `:l` is what keeps Serilog from
+quoting and escaping a Windows path.
 
 ## Versions
 
@@ -155,4 +210,5 @@ All package versions come from `Directory.NuGet.props` via MSBuild properties (`
 `WrapperGeneratorVersion`, `Net4xBaseTypesVersion`, `NuGetUtilityVersion`, …) combined with
 `$(VersionBuildSuffix)` (`*` — floating). That file is a large shared catalogue reused across the
 CommonLibrary repos; change versions there, not in individual csproj files. The exception is
-`MsOrNUnitToXunitConverter.csproj`, which pins `Net4x.StandardTypesWrappers` to `1.2.0.1` directly.
+`MsOrNUnitToXunitConverter.csproj`, which also pins `Net4x.StandardTypesWrappers` (`1.2.0.1`),
+`Microsoft.CodeAnalysis.CSharp` (`5.9.0`), `Serilog` (`4.3.1`) and `Serilog.Sinks.Console` (`6.1.1`) directly.

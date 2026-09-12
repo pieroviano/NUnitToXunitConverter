@@ -13,6 +13,7 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
     private bool _hasTearDown;
     private bool _hasOneTimeSetUp;
     private bool _needsOutputHelper;
+    private bool _needsLinq;
 
     private MethodDeclarationSyntax? _setUpMethod;
     private MethodDeclarationSyntax? _tearDownMethod;
@@ -208,6 +209,14 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
             newNode = newNode.AddMembers(fixture);
         }
 
+        // The generated code reaches for namespaces the source file had no reason to import.
+        if (_needsLinq)
+            newNode = WithUsing(newNode, "System.Linq");
+
+        // ITestOutputHelper lives in Xunit.Abstractions, not Xunit.
+        if (_needsOutputHelper)
+            newNode = WithUsing(newNode, "Xunit.Abstractions");
+
         return newNode;
     }
 
@@ -234,6 +243,16 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
                 Block(ThrowsAssert(expectedException, rewritten.Body, isAsync)));
         }
 
+        // [InlineData] makes a method data-driven, and xUnit discovers those through [Theory] - [Fact]
+        // alongside it is an error. MSTest always pairs [DataRow] with [TestMethod], but NUnit's [TestCase]
+        // stands on its own, so there may be no [Fact] to rename and the [Theory] has to be added.
+        if (HasAttribute(rewritten, "InlineData") && !HasAttribute(rewritten, "Theory"))
+        {
+            rewritten = HasAttribute(rewritten, "Fact")
+                ? RenameAttribute(rewritten, "Fact", "Theory")
+                : AddAttribute(rewritten, "Theory");
+        }
+
         // Awaits introduced above (or by VisitExpressionStatement) need the method to be async.
         if (isAsync &&
             !rewritten.Modifiers.Any(SyntaxKind.AsyncKeyword) &&
@@ -244,6 +263,34 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
         }
 
         return rewritten;
+    }
+
+    private static bool HasAttribute(MethodDeclarationSyntax method, string name)
+    {
+        return method.AttributeLists
+            .SelectMany(list => list.Attributes)
+            .Any(attribute => attribute.Name.ToString() == name);
+    }
+
+    /// <summary>Renames every occurrence of an attribute, keeping its arguments and its list layout.</summary>
+    private static MethodDeclarationSyntax RenameAttribute(
+        MethodDeclarationSyntax method,
+        string from,
+        string to)
+    {
+        return method.ReplaceNodes(
+            method.AttributeLists
+                .SelectMany(list => list.Attributes)
+                .Where(attribute => attribute.Name.ToString() == from),
+            (original, _) => original.WithName(IdentifierName(to)));
+    }
+
+    private static MethodDeclarationSyntax AddAttribute(MethodDeclarationSyntax method, string name)
+    {
+        return method.WithAttributeLists(
+            method.AttributeLists.Insert(
+                0,
+                AttributeList(SingletonSeparatedList(Attribute(IdentifierName(name))))));
     }
 
     private static bool IsAsync(MethodDeclarationSyntax node)
@@ -305,34 +352,31 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
         if (node.Expression is InvocationExpressionSyntax
             {
                 Expression: MemberAccessExpressionSyntax ma
-            } inv &&
-            ma.Expression.ToString() == "Assert" &&
-            inv.ArgumentList.Arguments.Count == 3 &&
-            !IsAsyncThrowsAssert(ma.Name.Identifier.Text))
+            } inv)
         {
-            _needsOutputHelper = true;
+            var arguments = inv.ArgumentList.Arguments;
 
-            var message = inv.ArgumentList.Arguments[2];
+            if (ma.Expression.ToString() == "Assert" &&
+                arguments.Count == 3 &&
+                !IsAsyncThrowsAssert(ma.Name.Identifier.Text))
+            {
+                return ReportingFailureMessage(
+                    (InvocationExpressionSyntax)VisitInvocationExpression(inv)!,
+                    SingletonSeparatedList(arguments[2]));
+            }
 
-            return TryStatement(
-                Block(
-                    ExpressionStatement(
-                        (InvocationExpressionSyntax)VisitInvocationExpression(inv)!)),
-                SingletonList(
-                    CatchClause()
-                        .WithBlock(
-                            Block(
-                                ExpressionStatement(
-                                    InvocationExpression(
-                                            MemberAccessExpression(
-                                                SyntaxKind.SimpleMemberAccessExpression,
-                                                IdentifierName("_output"),
-                                                IdentifierName("WriteLine")))
-                                        .WithArgumentList(
-                                            ArgumentList(
-                                                SingletonSeparatedList(message)))),
-                                ThrowStatement()))),
-                null);
+            // CollectionAssert takes its failure message after the arguments the xUnit rendering consumes,
+            // followed by the format parameters MSTest and NUnit both allow. ITestOutputHelper.WriteLine has
+            // a matching format overload, so everything past those arguments is forwarded unchanged.
+            if (ma.Expression.ToString() == "CollectionAssert" &&
+                CollectionAssertArities.TryGetValue(ma.Name.Identifier.Text, out var mappedArgumentCount) &&
+                arguments.Count > mappedArgumentCount &&
+                RewriteCollectionAssert(inv) is { } converted)
+            {
+                return ReportingFailureMessage(
+                    converted,
+                    SeparatedList(arguments.Skip(mappedArgumentCount)));
+            }
         }
 
         var rewritten = base.VisitExpressionStatement(node);
@@ -357,10 +401,42 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
     {
         return methodName is "ThrowsAsync" or "ThrowsExceptionAsync";
     }
+
+    /// <summary>
+    /// xUnit asserts carry no failure message, so the message the source passed is written to
+    /// <c>ITestOutputHelper</c> from a catch clause and the failure rethrown.
+    /// </summary>
+    private StatementSyntax ReportingFailureMessage(
+        InvocationExpressionSyntax assert,
+        SeparatedSyntaxList<ArgumentSyntax> messageArguments)
+    {
+        _needsOutputHelper = true;
+
+        return TryStatement(
+            Block(ExpressionStatement(assert)),
+            SingletonList(
+                CatchClause()
+                    .WithBlock(
+                        Block(
+                            ExpressionStatement(
+                                InvocationExpression(
+                                        MemberAccessExpression(
+                                            SyntaxKind.SimpleMemberAccessExpression,
+                                            IdentifierName("_output"),
+                                            IdentifierName("WriteLine")))
+                                    .WithArgumentList(ArgumentList(messageArguments))),
+                            ThrowStatement()))),
+            null);
+    }
     public override SyntaxNode? VisitInvocationExpression(InvocationExpressionSyntax node)
     {
-        if (node.Expression is not MemberAccessExpressionSyntax ma ||
-            ma.Expression.ToString() != "Assert")
+        if (node.Expression is not MemberAccessExpressionSyntax ma)
+            return base.VisitInvocationExpression(node);
+
+        if (ma.Expression.ToString() == "CollectionAssert")
+            return RewriteCollectionAssert(node) ?? base.VisitInvocationExpression(node);
+
+        if (ma.Expression.ToString() != "Assert")
             return base.VisitInvocationExpression(node);
 
         var method = ma.Name.Identifier.Text;
@@ -432,7 +508,161 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
             : IdentifierName(newName);
     }
 
+    // ---------------- COLLECTION ASSERT TRANSLATION ----------------
+
+    /// <summary>The lambda parameter the per-item asserts are written against.</summary>
+    private const string CollectionItemParameter = "item";
+
+    /// <summary>
+    /// The <c>CollectionAssert</c> members that have an xUnit rendering, mapped to the number of leading
+    /// arguments that rendering consumes; anything the source passes beyond them is the failure message.
+    /// Members absent from this table - <c>AreNotEquivalent</c>, <c>IsNotSubsetOf</c>, <c>IsOrdered</c> -
+    /// have no xUnit counterpart, so they are left alone and the converted project stops compiling on them
+    /// rather than silently asserting something weaker.
+    /// </summary>
+    private static readonly Dictionary<string, int> CollectionAssertArities = new()
+    {
+        ["AreEqual"] = 2,
+        ["AreNotEqual"] = 2,
+        ["AreEquivalent"] = 2,
+        ["Contains"] = 2,
+        ["DoesNotContain"] = 2,
+        ["IsEmpty"] = 1,
+        ["IsNotEmpty"] = 1,
+        ["AllItemsAreNotNull"] = 1,
+        ["AllItemsAreUnique"] = 1,
+        ["AllItemsAreInstancesOfType"] = 2,
+        ["IsSubsetOf"] = 2
+    };
+
+    /// <summary>
+    /// Translates a single <c>CollectionAssert</c> call, or returns <see langword="null"/> when the member
+    /// has no xUnit rendering and the call should be left untouched.
+    /// </summary>
+    private InvocationExpressionSyntax? RewriteCollectionAssert(InvocationExpressionSyntax node)
+    {
+        if (node.Expression is not MemberAccessExpressionSyntax ma ||
+            ma.Expression.ToString() != "CollectionAssert")
+            return null;
+
+        var method = ma.Name.Identifier.Text;
+
+        if (!CollectionAssertArities.TryGetValue(method, out var mappedArgumentCount) ||
+            node.ArgumentList.Arguments.Count < mappedArgumentCount)
+            return null;
+
+        var args = node.ArgumentList.Arguments;
+
+        switch (method)
+        {
+            case "AreEqual":
+                return AssertCall("Equal", args[0], args[1]);
+
+            case "AreNotEqual":
+                return AssertCall("NotEqual", args[0], args[1]);
+
+            // Assert.Equivalent compares without regard to order, which is what AreEquivalent means.
+            case "AreEquivalent":
+                return AssertCall("Equivalent", args[0], args[1]);
+
+            // CollectionAssert names the collection first, xUnit names the element first.
+            case "Contains":
+                return AssertCall("Contains", args[1], args[0]);
+
+            case "DoesNotContain":
+                return AssertCall("DoesNotContain", args[1], args[0]);
+
+            case "IsEmpty":
+                return AssertCall("Empty", args[0]);
+
+            case "IsNotEmpty":
+                return AssertCall("NotEmpty", args[0]);
+
+            case "AllItemsAreNotNull":
+                return AssertAll(args[0], AssertCall("NotNull", CollectionItem()));
+
+            // The expected type becomes a type argument, so it has to be spelled out at the call site; a
+            // Type-valued expression carries no syntax to lift and is left untouched.
+            case "AllItemsAreInstancesOfType":
+                return args[1].Expression is TypeOfExpressionSyntax typeOf
+                    ? AssertAll(
+                        args[0],
+                        AssertCall(GenericAssert("IsType", typeOf.Type), CollectionItem()))
+                    : null;
+
+            case "IsSubsetOf":
+                return AssertAll(args[0], AssertCall("Contains", CollectionItem(), args[1]));
+
+            // xUnit has no uniqueness assert. Note this evaluates the collection expression twice, so a
+            // side-effecting argument changes meaning.
+            case "AllItemsAreUnique":
+                _needsLinq = true;
+
+                return AssertCall(
+                    "Equal",
+                    Argument(Fluent(Fluent(args[0].Expression, "Distinct"), "Count")),
+                    Argument(Fluent(args[0].Expression, "Count")));
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>Builds <c>Assert.All(collection, item =&gt; assert)</c>.</summary>
+    private static InvocationExpressionSyntax AssertAll(
+        ArgumentSyntax collection,
+        ExpressionSyntax perItemAssert)
+    {
+        return AssertCall(
+            "All",
+            collection,
+            Argument(
+                SimpleLambdaExpression(Parameter(Identifier(CollectionItemParameter)))
+                    .WithExpressionBody(perItemAssert)));
+    }
+
+    private static ArgumentSyntax CollectionItem()
+    {
+        return Argument(IdentifierName(CollectionItemParameter));
+    }
+
+    private static InvocationExpressionSyntax AssertCall(string name, params ArgumentSyntax[] arguments)
+    {
+        return AssertCall(IdentifierName(name), arguments);
+    }
+
+    private static InvocationExpressionSyntax AssertCall(
+        SimpleNameSyntax name,
+        params ArgumentSyntax[] arguments)
+    {
+        return InvocationExpression(AssertMember(name))
+            .WithArgumentList(ArgumentList(SeparatedList(arguments)));
+    }
+
+    private static GenericNameSyntax GenericAssert(string name, TypeSyntax typeArgument)
+    {
+        return GenericName(Identifier(name))
+            .WithTypeArgumentList(TypeArgumentList(SingletonSeparatedList(typeArgument)));
+    }
+
+    /// <summary>Builds <c>receiver.Name()</c>, for the LINQ calls the collection asserts expand into.</summary>
+    private static InvocationExpressionSyntax Fluent(ExpressionSyntax receiver, string name)
+    {
+        return InvocationExpression(
+            MemberAccessExpression(
+                SyntaxKind.SimpleMemberAccessExpression,
+                receiver,
+                IdentifierName(name)));
+    }
+
     // ---------------- HELPERS ----------------
+
+    private static CompilationUnitSyntax WithUsing(CompilationUnitSyntax node, string name)
+    {
+        return node.Usings.Any(u => u.Name?.ToString() == name)
+            ? node
+            : node.WithUsings(node.Usings.Add(UsingDirective(ParseName(name))));
+    }
 
     private static ClassDeclarationSyntax AddInterface(
         ClassDeclarationSyntax cls,

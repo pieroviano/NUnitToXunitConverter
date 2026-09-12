@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using MsOrNUnitToXunitConverter.Logging;
 using ProjectsLibrary;
 
 namespace MsOrNUnitToXunitConverter;
@@ -10,7 +11,7 @@ public class Program
 
     public static int Main(string[] args)
     {
-        LoggerFactoryContainer.Instance.LoggerFactory = ConsoleLoggerFactory.Instance;
+        LoggerFactoryContainer.Instance.LoggerFactory = SerilogLoggerFactory.Instance;
         if (args.Length == 0 || !File.Exists(args[0]))
         {
             LoggerFactoryContainer.Instance.LoggerFactory.Info("Usage: MsOrNUnitToXunitConverter <path-to-csproj>");
