@@ -163,6 +163,25 @@ public class TestPackagesRewriter : ITestPackagesRewriter
                ?? string.Empty;
     }
 
+    /// <summary>
+    /// Whether the project references any of the test-framework packages above.
+    /// </summary>
+    /// <remarks>
+    /// The file-level detectors are substring sniffs, so a library that merely mentions "[TestFixture]" or
+    /// "NUnit.Framework" in a string literal looks exactly like a test project to them - this converter's own
+    /// sources among them. Asking the csproj instead is the reliable signal, and it is what keeps a
+    /// solution-wide run from rewriting ordinary libraries.
+    /// </remarks>
+    public bool ReferencesTestPackages(string csprojPath)
+    {
+        var doc = XDocument.Parse(File.ReadAllText(csprojPath));
+
+        return doc
+            .Descendants()
+            .Where(e => e.Name.LocalName == "PackageReference")
+            .Any(e => IsTestPackage(GetPackageId(e)));
+    }
+
     private static bool IsTestPackage(string packageId)
     {
         if (string.IsNullOrWhiteSpace(packageId))

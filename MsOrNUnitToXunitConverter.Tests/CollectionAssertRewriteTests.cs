@@ -103,12 +103,23 @@ public class Tests
     }
 
     [Fact]
-    public void AllItemsAreUnique_Compares_Distinct_Count_And_Adds_The_Linq_Using()
+    public void AllItemsAreUnique_Asserts_No_Duplicate_Groups_And_Adds_The_Linq_Using()
     {
         var result = Rewrite("CollectionAssert.AllItemsAreUnique(items);");
 
-        Assert.Contains("Assert.Equal(items.Distinct().Count(), items.Count())", result);
+        Assert.Contains(
+            "Assert.Empty(items.GroupBy(item => item).Where(group => group.Count() > 1))",
+            result);
         Assert.Contains("using System.Linq;", result);
+    }
+
+    [Fact]
+    public void AllItemsAreUnique_Names_A_Side_Effecting_Collection_Only_Once()
+    {
+        var result = Rewrite("CollectionAssert.AllItemsAreUnique(GetItems());");
+
+        // Two evaluations would call GetItems() twice and change what the test means.
+        Assert.Equal(1, result.Split("GetItems()").Length - 1);
     }
 
     [Fact]
@@ -165,6 +176,37 @@ public class Tests
 
         Assert.Contains("Assert.Empty(items)", result);
         Assert.Contains(@"_output.WriteLine(""still holds {0}"", items.Count)", result);
+    }
+
+    [Theory]
+    [InlineData("\"a plain message\"")]
+    [InlineData("$\"interpolated {value}\"")]
+    [InlineData("@\"verbatim message\"")]
+    [InlineData("\"prefix \" + value")]
+    [InlineData("(\"parenthesised \" + value)")]
+    public void An_Argument_Built_From_String_Literals_Is_Treated_As_The_Failure_Message(string message)
+    {
+        var result = Rewrite($"CollectionAssert.AreEqual(expected, actual, {message});");
+
+        Assert.Contains("Assert.Equal(expected, actual)", result);
+        Assert.Contains("_output.WriteLine(", result);
+        Assert.DoesNotContain("CollectionAssert", result);
+    }
+
+    [Fact]
+    public void A_Comparer_Overload_Is_Left_Untouched_Rather_Than_Written_Out_As_A_Message()
+    {
+        // NUnit and MSTest both put an IComparer where the failure message goes. It cannot be told apart
+        // from a message without type information, and no xUnit assert expresses it, so the call stays.
+        var result = Rewrite(@"
+        CollectionAssert.AreEqual(expected, actual, comparer);
+        CollectionAssert.AreEqual(expected, actual, new CaseInsensitiveComparer());
+        CollectionAssert.AreEqual(expected, actual, Comparer<int>.Default, ""with a message"");");
+
+        Assert.Contains("CollectionAssert.AreEqual(expected, actual, comparer)", result);
+        Assert.Contains("CollectionAssert.AreEqual(expected, actual, new CaseInsensitiveComparer())", result);
+        Assert.Contains(@"CollectionAssert.AreEqual(expected, actual, Comparer<int>.Default, ""with a message"")", result);
+        Assert.DoesNotContain("_output", result);
     }
 
     [Fact]

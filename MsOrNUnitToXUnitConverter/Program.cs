@@ -20,7 +20,19 @@ public class Program
 
         var csprojPath = Path.GetFullPath(args[0]);
 
-        new ConversionService().DoConversion(csprojPath, false);
+        try
+        {
+            new ConversionService().DoConversion(csprojPath, false);
+        }
+        catch (Exception exception)
+        {
+            // Reported rather than left to crash the process, so the message lands in the same log as every
+            // other step. DoConversion has already rolled the project back to its backup by this point.
+            LoggerFactoryContainer.Instance.LoggerFactory.Fatal(exception, $"Conversion failed: {csprojPath}");
+
+            return 1;
+        }
+
         return 0;
     }
 }

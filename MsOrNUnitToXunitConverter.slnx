@@ -13,5 +13,6 @@
   </Folder>
   <Project Path="ConversionClassLibrary/ConversionClassLibrary.csproj" />
   <Project Path="MsOrNUnitToXUnitConverter/MsOrNUnitToXunitConverter.csproj" />
+  <Project Path="MsOrNUnitToXunitConverter.Mcp/MsOrNUnitToXunitConverter.Mcp.csproj" />
   <Project Path="ProjectsLibrary/ProjectsLibrary.csproj" />
 </Solution>

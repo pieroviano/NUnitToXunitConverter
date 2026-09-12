@@ -1,4 +1,4 @@
-namespace ConversionClassLibrary.Interfaces;
+﻿namespace ConversionClassLibrary.Interfaces;
 
 /// <summary>
 /// Replaces the test-framework <c>PackageReference</c> items of a project file with the set required by xUnit.
@@ -18,6 +18,9 @@ public interface ITestPackagesRewriter
     /// </summary>
     /// <returns><c>true</c> when the project file was changed on disk.</returns>
     bool RewritePackageReferences(string csprojPath);
+
+    /// <summary>Whether the project references a known test framework at all.</summary>
+    bool ReferencesTestPackages(string csprojPath);
 }
 
 /// <summary>A package id/version pair to be written as a <c>PackageReference</c>.</summary>

@@ -10,7 +10,8 @@ public class ProjectRestoreService
 
     private const string ExternalFilesFolderName = "_ExternalFiles";
 
-    public void RestoreBackupIfExists(string csprojPath)
+    /// <summary>Restores the backup over the project. Returns whether there was one to restore.</summary>
+    public bool RestoreBackupIfExists(string csprojPath)
     {
         var projectDir = Path.GetDirectoryName(csprojPath)!;
         var projectName = Path.GetFileName(projectDir);
@@ -19,12 +20,28 @@ public class ProjectRestoreService
         var backupProjectDir = Path.Combine(oldRoot, projectName);
 
         if (!Directory.Exists(backupProjectDir))
-            return;
+            return false;
 
         LoggerFactoryContainer.Instance.LoggerFactory.Info($"Restoring backup from {backupProjectDir}");
 
+        RestoreProjectFile(csprojPath, backupProjectDir);
         RestoreProjectCsFiles(projectDir, backupProjectDir);
         RestoreExternalFiles(backupProjectDir);
+
+        return true;
+    }
+
+    /// <summary>
+    /// The csproj is part of what a conversion rewrites, so leaving it out of the restore left the project
+    /// half-converted - xUnit packages against unconverted sources - and let the next backup capture the
+    /// already-converted csproj, losing the original for good.
+    /// </summary>
+    private void RestoreProjectFile(string csprojPath, string backupProjectDir)
+    {
+        var backupCsproj = Path.Combine(backupProjectDir, Path.GetFileName(csprojPath));
+
+        if (File.Exists(backupCsproj))
+            File.Copy(backupCsproj, csprojPath, overwrite: true);
     }
 
     private void RestoreProjectCsFiles(string projectDir, string backupProjectDir)

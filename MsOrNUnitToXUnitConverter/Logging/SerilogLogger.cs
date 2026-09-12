@@ -17,12 +17,12 @@ public class SerilogLogger : LoggerWithEvents, System.Diagnostics.ILogger
         _logger = logger;
     }
 
-    public void Log(DiagnosticLevel level, Exception exception, string message, string title)
+    public void Log(DiagnosticLevel level, Exception? exception, string? message, string? title)
     {
         DoLog(level, exception, message, title, Write);
     }
 
-    public Task LogAsync(DiagnosticLevel level, Exception exception, string message, string title)
+    public Task LogAsync(DiagnosticLevel level, Exception? exception, string? message, string? title)
     {
         return DoLogAsync(level, exception, message, title, (l, e, m, t) =>
         {
@@ -45,7 +45,7 @@ public class SerilogLogger : LoggerWithEvents, System.Diagnostics.ILogger
         };
     }
 
-    private void Write(DiagnosticLevel level, Exception exception, string message, string title)
+    private void Write(DiagnosticLevel level, Exception? exception, string? message, string? title)
     {
         // The Net4x abstraction hands over an already formatted string, so there is no message template to
         // preserve; ":l" keeps Serilog from quoting it as a captured value.

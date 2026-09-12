@@ -371,6 +371,7 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
             if (ma.Expression.ToString() == "CollectionAssert" &&
                 CollectionAssertArities.TryGetValue(ma.Name.Identifier.Text, out var mappedArgumentCount) &&
                 arguments.Count > mappedArgumentCount &&
+                IsFailureMessage(arguments[mappedArgumentCount].Expression) &&
                 RewriteCollectionAssert(inv) is { } converted)
             {
                 return ReportingFailureMessage(
@@ -513,6 +514,9 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
     /// <summary>The lambda parameter the per-item asserts are written against.</summary>
     private const string CollectionItemParameter = "item";
 
+    /// <summary>The lambda parameter the uniqueness check groups into.</summary>
+    private const string GroupParameter = "group";
+
     /// <summary>
     /// The <c>CollectionAssert</c> members that have an xUnit rendering, mapped to the number of leading
     /// arguments that rendering consumes; anything the source passes beyond them is the failure message.
@@ -552,6 +556,12 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
             return null;
 
         var args = node.ArgumentList.Arguments;
+
+        // Both frameworks also offer IComparer overloads in the same position as the failure message. An
+        // extra argument that is not recognisably a string is assumed to be one of those: it carries
+        // comparison semantics no xUnit assert expresses, so the call is left for a human.
+        if (args.Count > mappedArgumentCount && !IsFailureMessage(args[mappedArgumentCount].Expression))
+            return null;
 
         switch (method)
         {
@@ -593,15 +603,13 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
             case "IsSubsetOf":
                 return AssertAll(args[0], AssertCall("Contains", CollectionItem(), args[1]));
 
-            // xUnit has no uniqueness assert. Note this evaluates the collection expression twice, so a
-            // side-effecting argument changes meaning.
+            // xUnit has no uniqueness assert. Grouping, then asserting that no group holds more than one
+            // member, says the same thing while naming the collection once - so a side-effecting argument
+            // such as AllItemsAreUnique(GetItems()) keeps its meaning.
             case "AllItemsAreUnique":
                 _needsLinq = true;
 
-                return AssertCall(
-                    "Equal",
-                    Argument(Fluent(Fluent(args[0].Expression, "Distinct"), "Count")),
-                    Argument(Fluent(args[0].Expression, "Count")));
+                return AssertCall("Empty", Argument(NoDuplicateGroups(args[0].Expression)));
 
             default:
                 return null;
@@ -613,12 +621,7 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
         ArgumentSyntax collection,
         ExpressionSyntax perItemAssert)
     {
-        return AssertCall(
-            "All",
-            collection,
-            Argument(
-                SimpleLambdaExpression(Parameter(Identifier(CollectionItemParameter)))
-                    .WithExpressionBody(perItemAssert)));
+        return AssertCall("All", collection, Argument(Lambda(CollectionItemParameter, perItemAssert)));
     }
 
     private static ArgumentSyntax CollectionItem()
@@ -645,14 +648,61 @@ public class XunitSyntaxRewriter : CSharpSyntaxRewriter
             .WithTypeArgumentList(TypeArgumentList(SingletonSeparatedList(typeArgument)));
     }
 
-    /// <summary>Builds <c>receiver.Name()</c>, for the LINQ calls the collection asserts expand into.</summary>
-    private static InvocationExpressionSyntax Fluent(ExpressionSyntax receiver, string name)
+    /// <summary>
+    /// Builds <c>collection.GroupBy(item =&gt; item).Where(group =&gt; group.Count() &gt; 1)</c> - the groups
+    /// that make a collection non-unique, with <paramref name="collection"/> written exactly once.
+    /// </summary>
+    private static InvocationExpressionSyntax NoDuplicateGroups(ExpressionSyntax collection)
+    {
+        var grouped = Fluent(
+            collection,
+            "GroupBy",
+            Argument(Lambda(CollectionItemParameter, IdentifierName(CollectionItemParameter))));
+
+        var duplicated = BinaryExpression(
+            SyntaxKind.GreaterThanExpression,
+            Fluent(IdentifierName(GroupParameter), "Count"),
+            LiteralExpression(SyntaxKind.NumericLiteralExpression, Literal(1)));
+
+        return Fluent(grouped, "Where", Argument(Lambda(GroupParameter, duplicated)));
+    }
+
+    /// <summary>Builds <c>receiver.Name(arguments)</c>, for the LINQ calls the collection asserts expand into.</summary>
+    private static InvocationExpressionSyntax Fluent(
+        ExpressionSyntax receiver,
+        string name,
+        params ArgumentSyntax[] arguments)
     {
         return InvocationExpression(
-            MemberAccessExpression(
-                SyntaxKind.SimpleMemberAccessExpression,
-                receiver,
-                IdentifierName(name)));
+                MemberAccessExpression(
+                    SyntaxKind.SimpleMemberAccessExpression,
+                    receiver,
+                    IdentifierName(name)))
+            .WithArgumentList(ArgumentList(SeparatedList(arguments)));
+    }
+
+    private static SimpleLambdaExpressionSyntax Lambda(string parameter, ExpressionSyntax body)
+    {
+        return SimpleLambdaExpression(Parameter(Identifier(parameter))).WithExpressionBody(body);
+    }
+
+    /// <summary>
+    /// Whether an argument can be taken for a failure message. The rewriter is syntax-only, so this is the
+    /// most that can be said without type information: an expression built out of string literals is
+    /// certainly text, and anything else might be the comparer of an <c>IComparer</c> overload.
+    /// </summary>
+    private static bool IsFailureMessage(ExpressionSyntax expression)
+    {
+        return expression switch
+        {
+            LiteralExpressionSyntax literal => literal.IsKind(SyntaxKind.StringLiteralExpression),
+            InterpolatedStringExpressionSyntax => true,
+            // "prefix " + value, and the nested concatenations that build up from it.
+            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.AddExpression) =>
+                IsFailureMessage(binary.Left) || IsFailureMessage(binary.Right),
+            ParenthesizedExpressionSyntax parenthesized => IsFailureMessage(parenthesized.Expression),
+            _ => false
+        };
     }
 
     // ---------------- HELPERS ----------------

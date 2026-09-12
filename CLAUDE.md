@@ -42,14 +42,23 @@ dotnet test MsTestsToNunit.Tests/MsTestsToNunit.Tests.csproj --no-build
 ```
 
 Single test / class: `--filter "FullyQualifiedName~ProjectScannerTests"`.
+
+Test parallelisation is switched off for the assembly (`MsOrNUnitToXunitConverter.Tests/AssemblyInfo.cs`). The
+converter logs through the process-wide `LoggerFactoryContainer` and several tests install their own factory to
+capture that output, so running classes in parallel races: a test sees another class's log lines in its sink,
+or has its own dropped because the container momentarily held a factory with a higher minimum level.
 Visual Studio's Test Explorer discovers the tests without this workaround.
 
 ### `ConversionServiceTests` mutates the working tree
 
 `MsOrNUnitToXunitConverter.Tests/ConversionServiceTests.cs` runs the real converter against the committed
 `MsTestProjectPoc` project, rewriting `MsTestProjectPoc/**` and refreshing the committed `Old/MsTestProjectPoc`
-backup. Exclude it (`--filter "FullyQualifiedName!~ConversionServiceTests"`) or `git checkout -- MsTestProjectPoc Old`
-afterwards.
+backup. Exclude it with `--filter "FullyQualifiedName!~Tests.ConversionServiceTests"` or
+`git checkout -- MsTestProjectPoc Old` afterwards. Note the `Tests.` prefix: the bare
+`!~ConversionServiceTests` also matches `SolutionConversionServiceTests`, silently skipping seven tests.
+
+`ConversionServiceRollbackTests` also drives the real pipeline, but against a throwaway directory under the
+system temp folder, so it leaves the working tree alone and can be run freely.
 
 Separately, *building* `MsTestProjectPoc` at all rewrites its `.csproj` (dropping the two inline
 `NuGet.Utility` `<Import>` lines) and leaves untracked `Directory.Build.Props`/`.Targets` beside it. That is
@@ -65,11 +74,15 @@ Three projects, layered by dependency:
   No dependency on the other projects.
 - **`ProjectsLibrary`** (net8.0) — the orchestration and the Roslyn rewriters. Depends on `ConversionClassLibrary`.
 - **`MsOrNUnitToXunitConverter`** (net10.0) — thin `Main` that wires the console logger and calls `ConversionService`.
+- **`MsOrNUnitToXunitConverter.Mcp`** (net10.0) — an MCP stdio server exposing the conversion as tools. Depends
+  on all three of the above (it reuses `SerilogLoggerFactory` from the console project).
 
 `ConversionService.DoConversion(csprojPath, forceMsTestProject)` is the whole pipeline, in strict order:
 
 1. `ProjectRestoreService.RestoreBackupIfExists` — restores `../Old/<ProjectName>` over the project **before**
-   scanning, so re-running is idempotent rather than cumulative.
+   scanning, so re-running is idempotent rather than cumulative. It puts back the `.cs` files, the external
+   files, **and the csproj**: leaving the csproj out used to mean the next `CreateBackup` captured the
+   already-converted csproj, so the original was lost after the second run.
 2. `UnitTestsFiles(new NUnitTestDetector())` scans; if it finds nothing (or `forceMsTestProject`), it rescans
    with `MsUnitTestDetector`.
 3. `ProjectBackupService.CreateBackup` — fresh backup into `../Old/<ProjectName>`.
@@ -77,7 +90,29 @@ Three projects, layered by dependency:
    items for the fixed xUnit set (only when the scan actually found test files).
 5. `NUnitToXunitRewriter.RewriteFile` per file.
 
-Detectors are substring sniffs over file text, not semantic analysis.
+Steps 4 and 5 are the only ones that write to the project, and they run inside a `try/catch` that restores the
+backup from step 3 before rethrowing — a failure half way through would otherwise leave xUnit packages against
+unconverted sources. A rollback that itself fails is logged at `Error` and swallowed, because letting it escape
+would replace the original cause with a symptom; `Program` then reports the real exception at `Fatal`.
+
+`DoConversion` returns a `ConversionResult` (the files rewritten, and whether the packages changed), and
+returns early — before step 3 — when the scan finds nothing. Skipping the backup in that case is what keeps a
+solution-wide run from leaving an `../Old/<ProjectName>` beside every non-test project it walked past.
+
+`SolutionConversionService` (`ProjectsLibrary/SolutionConversionService.cs`) applies all of the above across a
+solution: `SolutionScanner` reads the project list out of either format — the XML `.slnx` and the classic
+`.sln`, both parsed textually rather than through MSBuild — and each project is converted in turn. A project
+that throws is recorded in its `ProjectConversionOutcome` and the run continues, since `ConversionService` has
+already rolled that project back by then. A `.csproj` is accepted anywhere a solution is.
+
+**The project-level gate matters.** Detectors are substring sniffs over file text, not semantic analysis, so a
+library that merely mentions `"[TestFixture]"` or `"NUnit.Framework"` in a string literal looks exactly like a
+test project to them — *this converter's own `ConversionClassLibrary` and `ProjectsLibrary` do*. A solution-wide
+run would therefore have rewritten them. `TestPackagesRewriter.ReferencesTestPackages` is the gate: a project is
+only scanned if its csproj references a package from the known test-framework list. Note what this does **not**
+fix — a genuine test project whose sources discuss NUnit in string literals, such as
+`MsOrNUnitToXunitConverter.Tests` itself, still matches the file-level detectors. Run `list_test_projects`
+before `convert_solution` on an unfamiliar solution.
 
 `ProjectScanner.GetCsFiles` parses the csproj XML for `Compile Include`/`Remove` (expanding a small set of
 MSBuild properties and `*`/`**` globs), and falls back to an SDK-style recursive `*.cs` scan when there are no
@@ -129,11 +164,22 @@ overload). `AreEqual`/`AreNotEqual`/`IsEmpty`/`IsNotEmpty` are plain renames; `A
 `Assert.Equivalent` (order-insensitive, xUnit ≥ 2.5); `Contains`/`DoesNotContain` additionally swap their two
 arguments, because `CollectionAssert` names the collection first and xUnit names the element first.
 `AllItemsAreNotNull`, `AllItemsAreInstancesOfType(…, typeof(T))` and `IsSubsetOf` expand into
-`Assert.All(collection, item => …)`, and `AllItemsAreUnique` into `Assert.Equal(c.Distinct().Count(), c.Count())`
-— which sets `_needsLinq`, appending `using System.Linq;` to the compilation unit if it is not already there.
+`Assert.All(collection, item => …)`, and `AllItemsAreUnique` into
+`Assert.Empty(c.GroupBy(item => item).Where(group => group.Count() > 1))` — which sets `_needsLinq`, appending
+`using System.Linq;` to the compilation unit if it is not already there. That grouping form is deliberate: the
+obvious `Assert.Equal(c.Distinct().Count(), c.Count())` names the collection twice, so
+`AllItemsAreUnique(GetItems())` would call `GetItems()` twice.
 Members with no xUnit counterpart (`AreNotEquivalent`, `IsNotSubsetOf`, `IsOrdered`, and
 `AllItemsAreInstancesOfType` given a `Type`-valued expression rather than a `typeof`) are deliberately left
 untouched so the converted project fails to compile on them instead of asserting something weaker.
+
+Both frameworks also put an `IComparer` where the failure message goes, and a syntax-only rewriter cannot tell
+the two apart by type. `IsFailureMessage` therefore only accepts what is *certainly* text — a string literal,
+an interpolated string, or a `+` concatenation or parenthesised expression built from one. Anything else in
+that position is assumed to be a comparer and the whole call is left untouched, rather than converted into an
+`_output.WriteLine(comparer)` that does not compile. The cost is that
+`CollectionAssert.AreEqual(a, b, messageVariable)` is not converted either; the benefit is that nothing is
+silently mistranslated.
 
 ### Known gaps in the pipeline (observed, not hypothetical)
 
@@ -143,15 +189,58 @@ untouched so the converted project fails to compile on them instead of asserting
   (`[assembly: Parallelize(...)]`) contains no `[TestClass]`/`[TestMethod]`, so no detector selects it and it is
   left referencing MSTest types after the packages are swapped — the converted project then fails to compile
   until that file is deleted by hand.
-- The trailing argument of a `CollectionAssert` call is always taken to be a failure message. NUnit's
-  `CollectionAssert.AreEqual(expected, actual, IComparer)` overload therefore converts into
-  `_output.WriteLine(comparer)`, which does not compile. The rewriter is syntax-only, so the argument's type
-  is not knowable; the scalar asserts have always made the same assumption.
-- `AllItemsAreUnique` evaluates its argument twice (`c.Distinct().Count()` and `c.Count()`), so a
-  side-effecting collection expression changes meaning.
+- The scalar asserts still take any third argument for a failure message (`CollectionAssert` no longer does —
+  see `IsFailureMessage` above). No `Assert.AreEqual` overload takes a comparer in that position, so this has
+  not bitten, but it is the same syntax-only assumption.
 - `MsTestToNUnitContent` is no longer part of the conversion pipeline. It still ships and is still covered by
   `MsTestsToNunit.Tests`, but `NUnitToXunitRewriter` does the whole job in Roslyn now; the old regex pre-pass
   would otherwise have intercepted `[TestMethod, ExpectedException(...)]` before the syntax rewriter saw it.
+
+## The MCP server
+
+`MsOrNUnitToXunitConverter.Mcp` exposes the conversion over MCP on stdio. It is registered at **user scope**,
+so it is available in every repository rather than only this one, and it follows the same shape as the other
+CommonLibrary MCP servers (`rewrite-git-history`, `window-capture`): an absolute path to the **Release**
+executable.
+
+```bash
+msbuild MsOrNUnitToXunitConverter.Mcp/MsOrNUnitToXunitConverter.Mcp.csproj /p:Configuration=Release
+
+claude mcp add --scope user msornunit-to-xunit \
+  "D:\CommonLibrary\MsOrNUnitToXUnitConverter\MsOrNUnitToXunitConverter.Mcp\bin\Release\net10.0\MsOrNUnitToXunitConverter.Mcp.exe"
+```
+
+`claude mcp get msornunit-to-xunit` shows it, `claude mcp remove msornunit-to-xunit -s user` undoes it.
+
+Two things that follow from running the built exe. It is **not** `dotnet run`: that writes build output to
+stdout, and stdout is the JSON-RPC channel. And because the registration points at `bin/Release`, a rebuilt
+Release binary is picked up on the next session, while `msbuild /t:clean` leaves the server unable to start
+until Release is built again.
+
+There is deliberately no `.mcp.json` in the repo. A project-scoped entry of the same name conflicts with the
+user-scoped one ("defined in multiple scopes with different endpoints") and is redundant, since user scope
+already covers this repository. Add one only if the registration should travel with the repo to other people,
+and then give it a distinct name.
+
+Four tools, all in `ConversionTools.cs`, each a thin wrapper over `SolutionConversionService`:
+
+| Tool | Hints | Does |
+| --- | --- | --- |
+| `list_test_projects` | read-only | Reports the test projects of a solution and their framework, changing nothing. |
+| `convert_solution` | destructive | Converts every test project in a `.sln`/`.slnx`. |
+| `convert_project` | destructive | Converts one `.csproj`, like the CLI. |
+| `restore_backup` | destructive | Restores `../Old/<ProjectName>` over a solution's projects, undoing a run. |
+
+**Everything written to stdout corrupts the protocol.** `Program.cs` deals with both logging stacks: Serilog is
+built with `standardErrorFromLevel: LogEventLevel.Verbose` so every level goes to stderr, and
+`builder.Logging.ClearProviders()` removes the console provider `Host.CreateApplicationBuilder` installs, which
+writes to stdout. Anything added later — a `Console.WriteLine`, another logging provider — has to respect that.
+
+Validation failures are thrown as `McpException`: it is the one exception type whose message the SDK passes
+through to the client, everything else arriving as a bare `An error occurred invoking '<tool>'`.
+
+The tools return the domain records (`SolutionConversionResult`, `ConversionResult`, `TestProjectInfo`), which
+the SDK serialises to JSON, so a client gets structured results rather than prose to parse.
 
 ## Wrapper-type conventions (easy to get wrong)
 
@@ -198,6 +287,13 @@ Two traps in that abstraction, both learned the hard way:
   that exercise the synchronous path have to install it first — see
   `MsOrNUnitToXunitConverter.Tests/SerilogLoggerFactoryTests.cs`.
 
+`Main` wraps `DoConversion` in a `try/catch` that logs the exception at `Fatal` and returns 1, so a failure is
+reported through the same log as every other step instead of crashing the process. Nothing is lost by not
+letting it escape: the output template ends in `{Exception}`, so the stack trace is still printed, and the
+console sink is configured with `standardErrorFromLevel: LogEventLevel.Error` — the progress lines go to
+stdout, `Error`/`Fatal` and their stack traces to stderr, which is where an unhandled exception used to land.
+Exit codes are 0 on success and 1 for both a usage error and a failed conversion.
+
 `SerilogLogger` adds no filtering of its own: it maps `DiagnosticLevel` onto `LogEventLevel`, prefixes the
 title when there is one, passes the exception to Serilog rather than flattening it into the text, and routes
 through `DoLog`/`DoLogAsync` so the `BeforeLogging`/`Logged` events keep working. The message is already
@@ -212,3 +308,12 @@ All package versions come from `Directory.NuGet.props` via MSBuild properties (`
 CommonLibrary repos; change versions there, not in individual csproj files. The exception is
 `MsOrNUnitToXunitConverter.csproj`, which also pins `Net4x.StandardTypesWrappers` (`1.2.0.1`),
 `Microsoft.CodeAnalysis.CSharp` (`5.9.0`), `Serilog` (`4.3.1`) and `Serilog.Sinks.Console` (`6.1.1`) directly.
+
+The repo's own packages are versioned in the root `Directory.Build.Props` as
+`<Version>$(VersionPrefix).$(VersionBuildNumber)</Version>` — `1.0.0` plus `yy` + day-of-year, so the version
+changes daily. The day part must stay out of `VersionSuffix`: MSBuild reads that as a *prerelease label*, which
+made `Version` evaluate to `1.0.0-26255` while the packages were still stamped `1.0.0.26255`, so every
+`ProjectReference` became a prerelease dependency of a stable package and every build warned `NU5104`.
+
+Note that packing is skipped when the day's version is already in the shared feed, so a build can legitimately
+produce no `.nupkg` at all; `msbuild <project> /t:pack /p:PackageOutputPath=<dir>` forces one for inspection.

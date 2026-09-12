@@ -1,7 +1,7 @@
 <Project>
     <PropertyGroup>
         <ParentDirectoryBuildProps>$([MSBuild]::GetPathOfFileAbove('Directory.Build.Props', '$(MSBuildThisFileDirectory)../'))</ParentDirectoryBuildProps>
-        <VersionSuffix>$([System.DateTime]::Now.ToString("yy"))$([System.DateTime]::Now.DayOfYear.ToString("000"))</VersionSuffix>
+	    <VersionSuffix>$([System.DateTime]::Now.ToString("yy"))$([System.DateTime]::Now.DayOfYear.ToString("000"))</VersionSuffix>
     </PropertyGroup>
     <Import Project="$(ParentDirectoryBuildProps)" Condition="'$(ParentDirectoryBuildProps)'!=''" />
     <PropertyGroup>

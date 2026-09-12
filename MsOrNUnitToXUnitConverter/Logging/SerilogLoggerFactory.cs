@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using Serilog;
+using Serilog.Events;
 
 namespace MsOrNUnitToXunitConverter.Logging;
 
@@ -16,14 +17,16 @@ public class SerilogLoggerFactory : ILoggerFactory
     private readonly Serilog.ILogger _logger;
 
     /// <summary>
-    /// Writes to the console. Serilog is left at its most verbose so that <see cref="MinimumLoggingLevel"/>
-    /// stays the single place verbosity is decided. The console sink is synchronous, so nothing needs
-    /// flushing at exit.
+    /// Writes to the console, <see cref="DiagnosticLevel.Error"/> and above to standard error. Serilog is
+    /// left at its most verbose so that <see cref="MinimumLoggingLevel"/> stays the single place verbosity is
+    /// decided. The console sink is synchronous, so nothing needs flushing at exit.
     /// </summary>
     public SerilogLoggerFactory()
         : this(new LoggerConfiguration()
             .MinimumLevel.Verbose()
-            .WriteTo.Console(outputTemplate: OutputTemplate)
+            .WriteTo.Console(
+                outputTemplate: OutputTemplate,
+                standardErrorFromLevel: LogEventLevel.Error)
             .CreateLogger())
     {
     }
@@ -48,7 +51,7 @@ public class SerilogLoggerFactory : ILoggerFactory
     /// </summary>
     public DiagnosticLevel MinimumLoggingLevel { get; set; } = DiagnosticLevel.Default;
 
-    public System.Diagnostics.ILogger GetLogger(System.Threading.Thread thread)
+    public System.Diagnostics.ILogger GetLogger(System.Threading.Thread? thread = null)
     {
         return new SerilogLogger(_logger);
     }

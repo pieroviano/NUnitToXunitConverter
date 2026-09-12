@@ -2,7 +2,11 @@
   <Import Project="Directory.Nuget.Props" Condition="'$(DirectoryNuGet)'==''" />
   <PropertyGroup>
     <VersionPrefix>$(NUnitToXunitConverterVersion)</VersionPrefix>
-    <VersionSuffix>$([System.DateTime]::Now.ToString("yy"))$([System.DateTime]::Now.DayOfYear.ToString("000"))</VersionSuffix>
+    <!-- yy + day-of-year. This is the fourth field of a stable version, so it must NOT go into
+         VersionSuffix: NuGet reads that as a prerelease label, which made every ProjectReference resolve as
+         a prerelease dependency of a stable package (NU5104). -->
+    <VersionBuildNumber>$([System.DateTime]::Now.ToString("yy"))$([System.DateTime]::Now.DayOfYear.ToString("000"))</VersionBuildNumber>
+    <Version>$(VersionPrefix).$(VersionBuildNumber)</Version>
     <SolutionDir Condition="'$(SolutionDir)'==''">$(MSBuildThisFileDirectory)</SolutionDir>
   </PropertyGroup>
 </Project>

@@ -37,7 +37,7 @@ public class SerilogLoggerFactoryTests
             .WriteTo.Sink(sink)
             .CreateLogger();
 
-        return (new SerilogLoggerFactory(serilog).GetLogger(null), sink);
+        return (new SerilogLoggerFactory(serilog).GetLogger(), sink);
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public class SerilogLoggerFactoryTests
     {
         var (logger, sink) = CreateLogger();
 
-        await logger.LogAsync(DiagnosticLevel.Information, null!, "converting something", null!);
+        await logger.LogAsync(DiagnosticLevel.Information, null, "converting something", null);
 
         var logEvent = Assert.Single(sink.Events);
         Assert.Equal(LogEventLevel.Information, logEvent.Level);
@@ -65,7 +65,7 @@ public class SerilogLoggerFactoryTests
     {
         var (logger, sink) = CreateLogger();
 
-        await logger.LogAsync(level, null!, "message", null!);
+        await logger.LogAsync(level, null, "message", null);
 
         Assert.Equal(expected, Assert.Single(sink.Events).Level);
     }
@@ -75,7 +75,7 @@ public class SerilogLoggerFactoryTests
     {
         var (logger, sink) = CreateLogger();
 
-        await logger.LogAsync(DiagnosticLevel.Information, null!, "the message", "the title");
+        await logger.LogAsync(DiagnosticLevel.Information, null, "the message", "the title");
 
         Assert.Equal("the title: the message", Assert.Single(sink.Events).RenderMessage());
     }
@@ -86,7 +86,7 @@ public class SerilogLoggerFactoryTests
         var (logger, sink) = CreateLogger();
 
         var exception = new InvalidOperationException("boom");
-        await logger.LogAsync(DiagnosticLevel.Error, exception, "conversion failed", null!);
+        await logger.LogAsync(DiagnosticLevel.Error, exception, "conversion failed", null);
 
         var logEvent = Assert.Single(sink.Events);
         Assert.Same(exception, logEvent.Exception);
@@ -98,7 +98,7 @@ public class SerilogLoggerFactoryTests
     {
         var (logger, sink) = CreateLogger();
 
-        await logger.LogAsync(DiagnosticLevel.Information, null!, @"Converting: C:\proj\MyTests.cs", null!);
+        await logger.LogAsync(DiagnosticLevel.Information, null, @"Converting: C:\proj\MyTests.cs", null);
 
         // ":l" in the template - a quoted, escaped rendering would be useless in a console log.
         Assert.Equal(@"Converting: C:\proj\MyTests.cs", Assert.Single(sink.Events).RenderMessage());
@@ -114,7 +114,7 @@ public class SerilogLoggerFactoryTests
             factory.Info("Converting project: Some.csproj");
             factory.Info("Converting: MathTests.cs");
             factory.Warn("No MSTest or NUnit test files found");
-            factory.GetLogger(null).Log(DiagnosticLevel.Information, null!, "through ILogger.Log", null!);
+            factory.GetLogger().Log(DiagnosticLevel.Information, null, "through ILogger.Log", null);
         });
 
         Assert.Equal(
@@ -160,7 +160,7 @@ public class SerilogLoggerFactoryTests
 
         logger.BeforeLogging += (_, e) => e.Cancel = true;
 
-        await logger.LogAsync(DiagnosticLevel.Information, null!, "suppressed", null!);
+        await logger.LogAsync(DiagnosticLevel.Information, null, "suppressed", null);
 
         Assert.Empty(sink.Events);
     }
@@ -173,7 +173,7 @@ public class SerilogLoggerFactoryTests
         LoggingInfo? logged = null;
         logger.Logged += (_, e) => logged = e.Value;
 
-        await logger.LogAsync(DiagnosticLevel.Warning, null!, "watch out", null!);
+        await logger.LogAsync(DiagnosticLevel.Warning, null, "watch out", null);
 
         Assert.NotNull(logged);
         Assert.Equal("watch out", logged.Message);
@@ -194,8 +194,8 @@ public class SerilogLoggerFactoryTests
     {
         var factory = new SerilogLoggerFactory(new LoggerConfiguration().CreateLogger());
 
-        Assert.IsType<SerilogLogger>(factory.GetLogger(null));
-        Assert.NotSame(factory.GetLogger(null), factory.GetLogger(null));
+        Assert.IsType<SerilogLogger>(factory.GetLogger());
+        Assert.NotSame(factory.GetLogger(), factory.GetLogger());
     }
 
     [Fact]
