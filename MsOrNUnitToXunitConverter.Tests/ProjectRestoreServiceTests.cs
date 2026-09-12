@@ -1,11 +1,7 @@
-using System;
-using System.IO;
-using System.Linq;
 using NSubstitute;
-using Xunit;
 using ProjectsLibrary;
 
-namespace NUnitToXunitConverter.Tests;
+namespace MsOrNUnitToXunitConverter.Tests;
 
 public class ProjectRestoreServiceTests
 {

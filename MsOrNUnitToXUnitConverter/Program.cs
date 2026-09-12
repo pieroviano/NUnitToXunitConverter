@@ -1,5 +1,4 @@
 ﻿using System.Diagnostics;
-using MsOrNUnitToXunitConverter.Conversion;
 using ProjectsLibrary;
 
 namespace MsOrNUnitToXunitConverter;
@@ -20,32 +19,7 @@ public class Program
 
         var csprojPath = Path.GetFullPath(args[0]);
 
-        // 1️ Restore previous backup if present
-        new ProjectRestoreService().RestoreBackupIfExists(csprojPath);
-
-        // 2️ Scan project AFTER restore
-        var projectFiles = new UnitTestsFiles(new NUnitTestDetector()).GetUnitTestCsFiles(csprojPath);
-        bool hasMsTests=false;
-        if (projectFiles.Length == 0)
-        {
-            projectFiles = new UnitTestsFiles(new MsUnitTestDetector()).GetUnitTestCsFiles(csprojPath);
-            if (projectFiles.Length > 0)
-            {
-                hasMsTests = true;
-            }
-        }
-
-        // 3️ Create fresh backup
-        new ProjectBackupService().CreateBackup(csprojPath, projectFiles);
-
-        // 4️ Run conversion
-        foreach (var file in projectFiles)
-        {
-            LoggerFactoryContainer.Instance.LoggerFactory.Info($"Converting: {file}");
-            new NUnitToXunitRewriter(hasMsTests).RewriteFile(file);
-        }
-
-        LoggerFactoryContainer.Instance.LoggerFactory.Info("Conversion complete.");
+        new ConversionService().DoConversion(csprojPath, false);
         return 0;
     }
 }

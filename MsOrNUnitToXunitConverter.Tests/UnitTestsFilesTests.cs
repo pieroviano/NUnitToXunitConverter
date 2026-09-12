@@ -1,10 +1,8 @@
-using System.Linq;
-using NSubstitute;
-using Xunit;
 using ConversionClassLibrary.Interfaces;
-using MsOrNUnitToXunitConverter.Conversion;
+using NSubstitute;
+using ProjectsLibrary.Conversion;
 
-namespace NUnitToXunitConverter.Tests;
+namespace MsOrNUnitToXunitConverter.Tests;
 
 public class UnitTestsFilesTests
 {

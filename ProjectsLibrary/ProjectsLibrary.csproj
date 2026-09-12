@@ -1,35 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
-    <Import Project="$(NuGetPackageRoot)net4x.nugetutility/$(NuGetUtilityVersion)/build/NuGet.Utility.props" Condition="Exists('$(NuGetPackageRoot)net4x.nugetutility/$(NuGetUtilityVersion)/build/NuGet.Utility.props')" />
-    <PropertyGroup>
-        <PackageOutputPath>$(SolutionDir)Packages/</PackageOutputPath>
-        <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-        <Version>$(VersionPrefix).$(VersionSuffix)</Version>
-        <TargetFramework>net8.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-        <SignAssembly>true</SignAssembly>
-        <DelaySign>false</DelaySign>
-        <AssemblyOriginatorKeyFile>..\AsyncBridgeKey.snk</AssemblyOriginatorKeyFile>
-        <PackageId>Net4x.$(MSBuildProjectName)</PackageId>
-        <NoWarn>NU5118</NoWarn>
-    </PropertyGroup>
-    <ItemGroup>
-        <PackageReference Include="Net4x.BaseTypes" Version="$(Net4xBaseTypesVersion).$(VersionBuildSuffix)" />
-        <PackageReference Include="Net4x.NuGetUtility" Version="$(NuGetUtilityVersion)" PrivateAssets="All" />
-        <PackageReference Include="Net4x.StandardTypesWrappers" Version="$(WrapperGeneratorVersion).$(VersionBuildSuffix)" />
-    </ItemGroup>
-    <ItemGroup>
-        <ProjectReference Include="..\ConversionClassLibrary\ConversionClassLibrary.csproj" />
-    </ItemGroup>
-    <ItemGroup>
-        <None Include="README.md" Link="README.md" Pack="true" PackagePath="\README.md" />
-    </ItemGroup>
-    <PropertyGroup>
-        <PackageReadmeFile>README.md</PackageReadmeFile>
-    </PropertyGroup>
-    <ItemGroup>
-        <None Include="README.md" Link="README.md" Pack="true" PackagePath="\README.md" />
-    </ItemGroup>
-    <Import Project="$(NuGetPackageRoot)net4x.nugetutility/$(NuGetUtilityVersion)/build/NuGet.Utility.targets" Condition="Exists('$(NuGetPackageRoot)net4x.nugetutility/$(NuGetUtilityVersion)/build/NuGet.Utility.targets')" />
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Net4x.BaseTypes" Version="1.3.1.12" />
+		<PackageReference Include="Net4x.StandardTypesWrappers" Version="1.2.0.1" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <ProjectReference Include="..\ConversionClassLibrary\ConversionClassLibrary.csproj" />
+	</ItemGroup>
+
 </Project>

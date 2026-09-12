@@ -1,11 +1,7 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
 using NSubstitute;
-using Xunit;
 using ProjectsLibrary;
 
-namespace NUnitToXunitConverter.Tests;
+namespace MsOrNUnitToXunitConverter.Tests;
 
 public class ProjectBackupServiceTests
 {

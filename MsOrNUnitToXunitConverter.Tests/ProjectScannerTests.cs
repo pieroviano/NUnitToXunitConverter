@@ -1,12 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using NSubstitute;
-using Xunit;
+﻿using NSubstitute;
 using ProjectsLibrary;
 
-namespace NUnitToXunitConverter.Tests;
+namespace MsOrNUnitToXunitConverter.Tests;
 
 public class ProjectScannerTests
 {

@@ -1,6 +1,6 @@
 ﻿using ConversionClassLibrary.Interfaces;
 
-namespace MsOrNUnitToXunitConverter.Conversion;
+namespace ProjectsLibrary.Conversion;
 
 public class NUnitTestDetector : IUnitTestDetector
 {

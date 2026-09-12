@@ -8,8 +8,9 @@
   <Folder Name="/Tests/">
     <Project Path="MsOrNUnitToXunitConverter.Tests/MsOrNUnitToXunitConverter.Tests.csproj" />
     <Project Path="MsTestsToNunit.Tests/MsTestsToNunit.Tests.csproj" />
+    <Project Path="MsTestProjectPoc/MsTestProjectPoc.csproj" Id="77146d96-6160-447b-bd91-e2e9e7ed2d9d" />
   </Folder>
   <Project Path="ConversionClassLibrary/ConversionClassLibrary.csproj" Id="6d9de995-4614-460f-bac9-56559f80f072" />
-  <Project Path="MsOrNUnitToXunitConverter/MsOrNUnitToXunitConverter.csproj" />
+  <Project Path="NUnitToXunitConverter/NUnitToXunitConverter.csproj" DisplayName="NUnitToXUnitConverter" />
   <Project Path="ProjectsLibrary/ProjectsLibrary.csproj" Id="cbc612dc-4757-4146-9f71-efaea6b0c46b" />
 </Solution>

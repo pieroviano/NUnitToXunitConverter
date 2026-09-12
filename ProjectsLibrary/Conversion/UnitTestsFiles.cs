@@ -1,7 +1,6 @@
 ﻿using ConversionClassLibrary.Interfaces;
-using ProjectsLibrary;
 
-namespace MsOrNUnitToXunitConverter.Conversion;
+namespace ProjectsLibrary.Conversion;
 
 public class UnitTestsFiles : IUnitTestsFiles
 {

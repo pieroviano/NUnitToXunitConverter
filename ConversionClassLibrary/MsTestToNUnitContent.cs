@@ -8,7 +8,7 @@ namespace ConversionClassLibrary;
 
 public class MsTestToNUnitContent : IMsTestToNUnitContent
 {
-    public string? Transform(string fileContent, string filePath, bool format = true)
+    public string? Transform(string fileContent, bool format = true)
     {
         var original = fileContent;
 

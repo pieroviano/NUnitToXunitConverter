@@ -2,8 +2,7 @@
   <Import Project="Directory.Nuget.Props" Condition="'$(DirectoryNuGet)'==''" />
   <PropertyGroup>
     <VersionPrefix>$(NUnitToXunitConverterVersion)</VersionPrefix>
-    <VersionSuffix Condition="'$(Configuration)'!='Release'">0-at20251224094444</VersionSuffix>
-    <VersionSuffix Condition="'$(Configuration)'=='Release'">0</VersionSuffix>
+    <VersionSuffix>$([System.DateTime]::Now.ToString("yy"))$([System.DateTime]::Now.DayOfYear.ToString("000"))</VersionSuffix>
     <SolutionDir Condition="'$(SolutionDir)'==''">$(MSBuildThisFileDirectory)</SolutionDir>
   </PropertyGroup>
 </Project>
