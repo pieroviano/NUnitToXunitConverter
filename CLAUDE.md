@@ -88,9 +88,11 @@ Three projects, layered by dependency:
 3. `ProjectBackupService.CreateBackup` — fresh backup into `../Old/<ProjectName>`.
 4. `TestPackagesRewriter.RewritePackageReferences` — swaps the csproj's test-framework `PackageReference`
    items for the fixed xUnit set (only when the scan actually found test files).
-5. `NUnitToXunitRewriter.RewriteFile` per file.
+5. `SpecFlowRetargetService.Retarget` — points a SpecFlow project's configuration at the xUnit provider and
+   deletes the generated feature code-behind. A no-op for a project with no SpecFlow in it.
+6. `NUnitToXunitRewriter.RewriteFile` per file.
 
-Steps 4 and 5 are the only ones that write to the project, and they run inside a `try/catch` that restores the
+Steps 4 to 6 are the only ones that write to the project, and they run inside a `try/catch` that restores the
 backup from step 3 before rethrowing — a failure half way through would otherwise leave xUnit packages against
 unconverted sources. A rollback that itself fails is logged at `Error` and swallowed, because letting it escape
 would replace the original cause with a symptom; `Program` then reports the real exception at `Fatal`.
@@ -114,7 +116,9 @@ fix — a genuine test project whose sources discuss NUnit in string literals, s
 `MsOrNUnitToXunitConverter.Tests` itself, still matches the file-level detectors. Run `list_test_projects`
 before `convert_solution` on an unfamiliar solution.
 
-`ProjectScanner.GetCsFiles` parses the csproj XML for `Compile Include`/`Remove` (expanding a small set of
+`ProjectScanner.GetCsFiles` never offers SpecFlow's `*.feature.cs`: it is regenerated from the `.feature` file
+on every build, so rewriting it produces a diff the next build discards. It parses the csproj XML for
+`Compile Include`/`Remove` (expanding a small set of
 MSBuild properties and `*`/`**` globs), and falls back to an SDK-style recursive `*.cs` scan when there are no
 `Compile` items; `obj/` is always excluded. `UnitTestsFiles` sorts files containing `[OneTimeSetUp]` first
 (by ordering their key as `"_____.cs"`), because `XunitSyntaxRewriter` names the generated `IClassFixture<>`
@@ -273,6 +277,37 @@ through to the client, everything else arriving as a bare `An error occurred inv
 
 The tools return the domain records (`SolutionConversionResult`, `ConversionResult`, `TestProjectInfo`), which
 the SDK serialises to JSON, so a client gets structured results rather than prose to parse.
+
+## SpecFlow
+
+SpecFlow is not a unit test framework — it runs on top of one — so a SpecFlow project is **retargeted**, not
+converted. `ProjectsLibrary/Conversion/SpecFlow.cs` holds what the converter needs to know about it and
+`SpecFlowRetargetService` does the work beside the csproj.
+
+| Part | What happens |
+| --- | --- |
+| `SpecFlow.NUnit`, `SpecFlow.NUnit.Runners`, `SpecFlow.MsTest` | renamed in place to `SpecFlow.xUnit`, keeping the version |
+| `SpecFlow`, `SpecFlow.Tools.MsBuild.Generation` | untouched — dropping them takes the framework with them |
+| `NUnit`, `MSTest` and the rest | swapped for the xUnit set as usual |
+| `unitTestProvider` in `specflow.json` and `App.config` | set to `xunit` |
+| `*.feature`, `[Binding]`, `[Given]`/`[When]`/`[Then]`, `[BeforeScenario]` | untouched — framework-agnostic |
+| `*.feature.cs` | deleted, and never rewritten |
+| asserts inside step definitions | converted like any other assert |
+
+Three things about this are easy to get wrong:
+
+- **The provider package is renamed, not replaced.** `TestPackagesRewriter` otherwise drops every matching
+  package and inserts the fixed xUnit set; doing that to `SpecFlow.NUnit` would remove SpecFlow itself.
+- **The config names the provider independently of the package.** Swapping the package alone leaves a project
+  that builds and then fails at run time looking for the old provider — the worst place to find out.
+- **`specflow.json` is edited as text, not reparsed as JSON**, so formatting, key order and any other setting
+  survive. Only the provider name is touched.
+
+A SpecFlow package also counts as evidence of a test project in `ReferencesTestPackages`, so a project whose
+only framework reference is `SpecFlow.NUnit` is not skipped by a solution-wide run.
+
+SpecFlow is end-of-life and Reqnroll is the maintained fork; migrating between the two is a different job and
+is not attempted.
 
 ## Wrapper-type conventions (easy to get wrong)
 

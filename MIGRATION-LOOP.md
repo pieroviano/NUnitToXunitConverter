@@ -147,6 +147,53 @@ somebody decides what those tests should do instead. That is the tool working co
 
 ---
 
+## SpecFlow projects are retargeted, not converted
+
+SpecFlow is not a unit test framework. It runs on top of one, which is why a SpecFlow suite that fails to
+convert cleanly usually fails in a confusing way: the Gherkin is fine, the bindings are fine, and the thing
+that is wrong is a package reference and a line of configuration.
+
+So a SpecFlow project is **retargeted**. The provider package is renamed in place, keeping its version, and
+SpecFlow itself is left alone:
+
+```
+SpecFlow.NUnit  3.9.74   →   SpecFlow.xUnit  3.9.74
+SpecFlow        3.9.74   →   SpecFlow        3.9.74      (untouched)
+NUnit           3.13.3   →   xunit, xunit.runner.visualstudio, ...
+```
+
+The provider is also named in `specflow.json` or `App.config`, independently of the package, so both are set to
+`xunit`. Swapping only the package gives you a project that builds and then fails at run time looking for a
+provider that is not there — the worst place to find out.
+
+The `.feature` files, the `[Binding]` classes, the `[Given]`/`[When]`/`[Then]` attributes and the hooks are all
+framework-agnostic and are not touched. The only thing inside a step definition that belongs to the unit test
+framework is the assertion:
+
+```csharp
+[Binding]
+public class LoginSteps
+{
+    [BeforeScenario]                        // untouched
+    public void Before() { }
+
+    [Then(@"the total is (.*)")]            // untouched
+    public void ThenTotal(int expected)
+    {
+        Assert.AreEqual(expected, _total);  // → Assert.Equal(expected, _total);
+    }
+}
+```
+
+Generated code-behind — the `Foo.feature.cs` the legacy generator writes beside `Foo.feature` — is never
+rewritten, and is deleted so the build regenerates it against the new provider. A stale code-behind still
+shaped for the old provider is what actually breaks the build after a retarget.
+
+One thing to weigh before you start: SpecFlow is end-of-life, and Reqnroll is the maintained fork. Retargeting
+to `SpecFlow.xUnit` is a real move, but it is a move within a framework that has stopped.
+
+---
+
 ## Wiring it into the week
 
 Registered once at user scope, the MCP server is available in every repository on the machine rather than only

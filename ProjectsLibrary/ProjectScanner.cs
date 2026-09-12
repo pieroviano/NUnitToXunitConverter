@@ -151,6 +151,13 @@ public class ProjectScanner : IProjectScanner
             return false;
         }
 
+        // SpecFlow regenerates its feature code-behind on every build, so rewriting it achieves nothing
+        // beyond a diff the next build throws away.
+        if (Conversion.SpecFlow.IsGeneratedFeatureCode(fullPath))
+        {
+            return false;
+        }
+
         return true;
     }
 }

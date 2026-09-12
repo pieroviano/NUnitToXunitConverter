@@ -142,6 +142,32 @@ reverses the meaning of the assert silently.
 
 ---
 
+## SpecFlow
+
+SpecFlow is not a unit test framework; it runs on top of one. A SpecFlow project is therefore **retargeted**
+rather than converted — the provider changes, the Gherkin and the bindings do not.
+
+| Part | What happens |
+| --- | --- |
+| `SpecFlow.NUnit`, `SpecFlow.NUnit.Runners`, `SpecFlow.MsTest` | renamed in place to `SpecFlow.xUnit`, keeping the version |
+| `SpecFlow`, `SpecFlow.Tools.MsBuild.Generation` | untouched |
+| `NUnit`, `MSTest` and the rest | swapped for the xUnit set as usual |
+| `unitTestProvider` in `specflow.json` and `App.config` | set to `xunit` |
+| `*.feature` files, `[Binding]`, `[Given]`/`[When]`/`[Then]`, `[BeforeScenario]` and the other hooks | untouched |
+| `*.feature.cs` | deleted so the build regenerates it, and never rewritten |
+| asserts inside step definitions | converted like any other assert |
+
+The provider package is renamed rather than dropped and replaced, because dropping it would take SpecFlow
+itself with it. The configuration is edited as well as the package because it names the provider independently:
+a project with the right package and the wrong config builds, then fails at run time looking for a provider
+that is not there. And `specflow.json` is edited as text rather than reparsed as JSON, so formatting, key order
+and every other setting survive.
+
+A SpecFlow package counts as evidence of a test project, so a project whose only framework reference is
+`SpecFlow.NUnit` is not skipped by a solution-wide run.
+
+---
+
 ## Files, projects and formatting
 
 Both detectors run over every project, so a part-migrated project holding both frameworks converts completely.
@@ -180,6 +206,7 @@ it stays and the compiler raises it.
 | Constraints outside the vocabulary | `Has.Count`/`Has.Length`/`Has.Property`, chained modifiers such as `Is.EqualTo(x).Within(d)` or `.IgnoreCase`, `Is.Ordered`, `Is.Unique`, `Is.SupersetOf`, and the `&`/`\|` combinators. Each needs its own rule. |
 | Lifecycle inherited from a base class | xUnit's constructor/`IDisposable` model would need the base chain considered, and the base class is usually in another file. |
 | Generic fixtures | `[TestFixture]` on a generic class has no xUnit equivalent. |
+| SpecFlow to Reqnroll | SpecFlow is end-of-life and Reqnroll is the maintained fork, but moving between them is a different migration: the `TechTalk.SpecFlow` namespaces, the package set and the configuration file name all change. Retargeting the provider is what is offered; the framework itself stays where it is. |
 | Two assembly-level declarations | MSTest's `[AssemblyInitialize]` in one file and NUnit's `[SetUpFixture]` in another cannot merge into one fixture. The first wins; the second is reported at `Warn` for merging by hand. |
 | Detection accuracy | Detectors are substring sniffs over file text, so a file mentioning `"[TestFixture]"` in a string literal looks like a test file. The project-level gate (`ReferencesTestPackages`) keeps solution-wide runs off ordinary libraries, but not off a genuine test project whose sources discuss the frameworks — this repository's own test project is exactly that. |
 
@@ -199,3 +226,5 @@ it stays and the compiler raises it.
 | `Conversion/AssemblySettings.cs` | Assembly-level parallelism settings |
 | `Conversion/SourceFramework.cs` | Which framework a file was written against |
 | `Conversion/AnyFrameworkTestDetector.cs` | Matches either framework |
+| `Conversion/SpecFlow.cs` | What the converter knows about SpecFlow |
+| `SpecFlowRetargetService.cs` | SpecFlow configuration and generated code-behind |

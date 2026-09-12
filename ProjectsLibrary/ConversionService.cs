@@ -70,7 +70,13 @@ namespace ProjectsLibrary
                     ? $"Updated test packages: {csprojPath}"
                     : $"Test packages already reference xUnit, left unchanged: {csprojPath}");
 
-                // 5️ Run conversion
+                // 5️ Point SpecFlow at the xUnit provider, if this is a SpecFlow project
+                foreach (var retargeted in new SpecFlowRetargetService().Retarget(csprojPath))
+                {
+                    logger.Info($"SpecFlow retarget: {retargeted}");
+                }
+
+                // 6️ Run conversion
                 var rewriter = new NUnitToXunitRewriter();
 
                 rewriter.Context.ProjectHasAssemblyFixture = projectFiles.Any(HasAssemblyFixture);

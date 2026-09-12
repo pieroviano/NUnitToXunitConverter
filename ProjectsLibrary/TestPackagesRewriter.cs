@@ -1,6 +1,7 @@
 ﻿using System.Text;
 using System.Xml.Linq;
 using ConversionClassLibrary.Interfaces;
+using ProjectsLibrary.Conversion;
 
 namespace ProjectsLibrary;
 
@@ -65,10 +66,21 @@ public class TestPackagesRewriter : ITestPackagesRewriter
             return false;
         }
 
+        // SpecFlow's provider package is retargeted in place, keeping its version: SpecFlow itself has to
+        // survive the conversion, so dropping it with the rest would take the whole framework with it.
+        var retargeted = RetargetSpecFlowProvider(doc);
+
         var replaced = doc
             .Descendants()
             .Where(e => e.Name.LocalName == "PackageReference" && IsTestPackage(GetPackageId(e)))
             .ToList();
+
+        if (replaced.Count == 0 && retargeted)
+        {
+            File.WriteAllText(csprojPath, Serialize(doc));
+
+            return true;
+        }
 
         // "Replace in place": the new item group takes the position of the item group that held the first match,
         // so the project file keeps the shape the author gave it.
@@ -164,6 +176,35 @@ public class TestPackagesRewriter : ITestPackagesRewriter
     }
 
     /// <summary>
+    /// Renames a SpecFlow unit-test provider package to the xUnit one. Returns whether anything changed.
+    /// </summary>
+    private static bool RetargetSpecFlowProvider(XDocument doc)
+    {
+        var changed = false;
+
+        foreach (var packageReference in doc
+                     .Descendants()
+                     .Where(e => e.Name.LocalName == "PackageReference")
+                     .ToList())
+        {
+            var provider = SpecFlow.RetargetedProvider(GetPackageId(packageReference));
+
+            if (provider == null)
+                continue;
+
+            var include = packageReference.Attribute("Include") ?? packageReference.Attribute("Update");
+
+            if (include == null)
+                continue;
+
+            include.Value = provider;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    /// <summary>
     /// Whether the project references any of the test-framework packages above.
     /// </summary>
     /// <remarks>
@@ -176,10 +217,13 @@ public class TestPackagesRewriter : ITestPackagesRewriter
     {
         var doc = XDocument.Parse(File.ReadAllText(csprojPath));
 
+        // SpecFlow counts here even though none of its packages are replaced: a SpecFlow project is still a
+        // test project, and one whose only framework reference is SpecFlow.NUnit would otherwise be skipped.
         return doc
             .Descendants()
             .Where(e => e.Name.LocalName == "PackageReference")
-            .Any(e => IsTestPackage(GetPackageId(e)));
+            .Select(GetPackageId)
+            .Any(id => IsTestPackage(id) || SpecFlow.IsSpecFlowPackage(id));
     }
 
     private static bool IsTestPackage(string packageId)

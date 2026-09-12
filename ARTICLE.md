@@ -194,6 +194,71 @@ The same applies to `[Order]`, `[Repeat]`, `[MaxTime]`, `[DeploymentItem]`, `Ass
 reference lives in
 [CONVERSION-GAPS.md](https://github.com/pieroviano/NUnitToXunitConverter/blob/master/CONVERSION-GAPS.md).
 
+## SpecFlow Projects Are Retargeted, Not Converted
+
+SpecFlow deserves its own treatment, because it is not a unit test framework — it runs on top of one. A
+SpecFlow project references `SpecFlow` plus a provider package such as `SpecFlow.NUnit`, and the Gherkin,
+bindings and hooks sit above whichever provider is in use.
+
+That means the conversion is a **retarget**. The provider package is renamed in place, keeping its version,
+while SpecFlow itself is left alone:
+
+```xml
+<!-- Before -->
+<PackageReference Include="SpecFlow" Version="3.9.74" />
+<PackageReference Include="SpecFlow.NUnit" Version="3.9.74" />
+<PackageReference Include="NUnit" Version="3.13.3" />
+
+<!-- After -->
+<PackageReference Include="SpecFlow" Version="3.9.74" />
+<PackageReference Include="SpecFlow.xUnit" Version="3.9.74" />
+<PackageReference Include="xunit" Version="2.9.3" />
+<PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+```
+
+SpecFlow also names the provider in configuration, independently of the package, so `specflow.json` and
+`App.config` are updated too:
+
+```json
+{
+  "unitTestProvider": {
+    "name": "xunit"
+  }
+}
+```
+
+Swapping only the package leaves a project that compiles and then fails at run time looking for a provider that
+is no longer referenced.
+
+The `.feature` files, the `[Binding]` classes, the `[Given]`/`[When]`/`[Then]` attributes and the hooks are all
+framework-agnostic and are not touched. Inside a step definition, the only thing that belongs to the unit test
+framework is the assertion:
+
+```csharp
+[Binding]
+public class LoginSteps
+{
+    [BeforeScenario]                         // untouched
+    public void Before() { }
+
+    [Then(@"the total is (.*)")]             // untouched
+    public void ThenTotal(int expected)
+    {
+        Assert.AreEqual(expected, _total);   // becomes Assert.Equal(expected, _total);
+    }
+}
+```
+
+Finally, SpecFlow's generated code-behind — the `Foo.feature.cs` the legacy generator writes next to
+`Foo.feature` — is never rewritten, because the next build regenerates it and discards the change. It is
+deleted instead, so the build regenerates it against the new provider. A stale code-behind still shaped for the
+old provider is the most common reason a SpecFlow retarget appears to fail.
+
+One caveat worth stating plainly: SpecFlow is end-of-life, and [Reqnroll](https://reqnroll.net/) is the
+maintained community fork. Retargeting to `SpecFlow.xUnit` is a genuine step, but it is a step inside a
+framework that has stopped moving. If you are planning a longer migration, decide whether the destination is
+xUnit under SpecFlow, or Reqnroll.
+
 ## Driving It From an AI Assistant
 
 Besides the command line, the solution ships an **MCP server** — Model Context Protocol, the standard that
@@ -251,3 +316,4 @@ convert arrives as a build error with a line number, and that everything it did 
 - [xUnit.net documentation](https://xunit.net/)
 - [Roslyn (.NET Compiler Platform) SDK](https://learn.microsoft.com/en-us/dotnet/csharp/roslyn-sdk/)
 - [Model Context Protocol](https://modelcontextprotocol.io/)
+- [Reqnroll](https://reqnroll.net/), the maintained fork of SpecFlow
